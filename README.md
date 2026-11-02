@@ -1,45 +1,8 @@
 # ChatGPT Stockfish MCP
 
-A remote MCP server that gives ChatGPT, Codex, and other MCP clients direct access to **Stockfish 19** chess calculation.
+A low-latency remote chess MCP for ChatGPT, Codex, and other MCP clients. It combines **Stockfish 19**, opening/master-game context, exact Syzygy tablebases, and optional persistent player history.
 
-## What it exposes
-
-- `validate_position(fen)` — validates FEN and returns legal moves.
-- `analyze_position(fen, time_ms, multipv, depth, nodes)` — fixed-budget ranked Stockfish lines.
-- `adaptive_analysis(fen, profile, close_gap_cp)` — starts cheaply and deepens only when the top moves are close.
-- `compare_moves(fen, moves, time_ms)` — compares specific candidates in one restricted MultiPV search.
-- `analyze_move(fen, move, time_ms)` — audits one move versus Stockfish's best.
-- `tactical_scan(fen, time_ms, multipv, mode)` — deeper MultiPV scan plus tactical signals.
-- `engine_status()` — engine version/config/profiles/limits.
-
-The MCP endpoint is `/mcp`; the health endpoint is `/health`.
-
-## Architecture
-
-```text
-User -> ChatGPT/Codex -> HTTPS MCP -> Cloud Run -> Stockfish 19 -> structured lines -> model explanation
-```
-
-Cloud Run is intentionally configured with request concurrency `1` because each container owns one Stockfish process. Autoscaling creates additional containers when necessary.
-
-## Latency target
-
-The service is tuned so **30 seconds is a hard infrastructure ceiling, not a normal response target**.
-
-Typical engine-side targets are:
-
-```text
-quick    ~0.5-2s
-normal   ~1.2-5s
-deep     ~3-12s
-hard Cloud Run request ceiling: 30s
-```
-
-Cloud Run uses `min=0` to avoid idle spend and enables startup CPU boost to reduce cold-start latency. With 2 configured vCPUs, Cloud Run can temporarily provide extra startup CPU while the container starts. A cold request may still be slower than a warm one, so end-to-end ChatGPT latency cannot be guaranteed exactly, but the MCP itself is deliberately budgeted well below 30 seconds.
-
-## Planned full chess-brain pipeline
-
-The long-term orchestration target is:
+## Implemented architecture
 
 ```text
                     Chess request
@@ -53,7 +16,7 @@ The long-term orchestration target is:
    Opening/Game DB    Stockfish      Player history
           |              |              |
           |              v              |
-          |       adaptive_analysis     |
+          |       adaptive analysis     |
           |              |              |
           +--------------+--------------+
                          |
@@ -67,15 +30,48 @@ The long-term orchestration target is:
                 Final recommendation
 ```
 
-Independent lookups should run **in parallel**, not serially. A future orchestration layer should reserve a few seconds of the 30-second ceiling for network/model overhead and cancel optional lookups when their deadline expires. Tablebase results, when available, are exact and should override heuristic engine evaluation for that endgame position.
+The independent context lookups start in parallel while Stockfish searches. Exact Syzygy results are authoritative in supported endgames. Player history is advisory only: it personalizes explanations and training advice but never overrides objective calculation.
 
-For low latency, avoid putting huge game or Syzygy datasets directly in the Cloud Run image. Prefer a compact local opening index/cache plus bounded remote/storage lookups, with aggressive caching of repeated FENs.
+## MCP tools
 
-## How the adaptive analysis works
+- `full_analysis(...)` — preferred tool; runs the whole parallel chess-brain pipeline.
+- `validate_position(fen)` — validates FEN and returns legal moves.
+- `adaptive_analysis(fen, profile, close_gap_cp)` — Stockfish only, with selective deepening.
+- `analyze_position(...)` — fixed-budget Stockfish analysis.
+- `opening_context(fen)` — local opening recognition plus optional authenticated Lichess master-game data.
+- `tablebase_lookup(fen)` — exact Lichess Syzygy lookup for supported <=7-piece positions.
+- `player_history(player_id, fen)` — reads persistent personal history when Firestore is enabled.
+- `record_player_event(...)` — stores a bounded training/history event in Firestore.
+- `compare_moves(...)` — compares named candidates in one restricted MultiPV search.
+- `analyze_move(...)` — audits one move against Stockfish's best.
+- `tactical_scan(...)` — MultiPV tactical scan and forcing signals.
+- `engine_status()` — engine, cache, context, and safety configuration.
 
-For ordinary analysis, prefer `adaptive_analysis` instead of immediately asking for a long fixed search.
+MCP endpoint: `/mcp`
 
-Profiles:
+Health endpoint: `/health`
+
+## Latency target
+
+**30 seconds is the infrastructure ceiling, not the target.**
+
+```text
+quick     usually ~0.5-2s engine time
+normal    usually ~1.2-5s engine time
+deep      usually ~3-12s engine time
+full_analysis default budget: 25s
+Cloud Run request timeout: 30s
+```
+
+`full_analysis` starts opening/game lookup, tablebase lookup, and player-history lookup concurrently. Stockfish searches at the same time. Optional network context is individually bounded to about 1.2 seconds so a slow provider cannot hold the answer hostage.
+
+Repeated identical Stockfish requests are cached for a short period on warm Cloud Run instances. Opening and tablebase results have separate TTL caches.
+
+## Stockfish behavior
+
+Stockfish itself does **not** learn online from requests. It uses its shipped NNUE network plus search. The learning/personalization layer lives outside the engine in player history.
+
+Adaptive profiles:
 
 ```text
 quick   initial 0.5s, confirmation 1.5s, MultiPV 2
@@ -83,89 +79,75 @@ normal  initial 1.2s, confirmation 3.5s, MultiPV 4
 deep    initial 3.0s, confirmation 8.0s, MultiPV 5
 ```
 
-The first pass checks several candidate moves. If the top two are within the configured centipawn gap (35 cp by default) and no forced mate is already visible, the MCP runs a deeper search restricted to those two moves. Obvious positions therefore stay cheap, while unclear positions get extra calculation.
+If the top moves are already clearly separated, no confirmation search is needed. If they are close, only the top candidates are re-searched more deeply. If Syzygy already gives an exact result, the deeper engine confirmation is skipped.
 
-This is not online learning. Stockfish uses its shipped NNUE evaluation network plus search; it does not permanently learn from each request or from your games while this service is running. If we later want personalization, keep player/game history outside Stockfish and retrieve it as context alongside objective engine calculation.
+## Opening and game context
 
-## Requirements
+A compact local opening index provides instant fallback recognition for common openings.
 
-- Python 3.11+ for local development.
-- Docker for the easiest local test.
-- Google Cloud CLI (`gcloud`) for deployment.
-- A Google Cloud project with billing enabled.
-- Git/GitHub CLI if you want Codex to configure deployment automatically.
+For richer master-game statistics, configure a Lichess access token as a Cloud Run secret/environment value:
 
-## Local Python development
-
-Install a local Stockfish binary and point `STOCKFISH_PATH` at it.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
-pip install -e '.[dev]'
-export STOCKFISH_PATH=/path/to/stockfish
-ruff check app tests
-pytest -q
-python -m app.server
+```text
+LICHESS_TOKEN=...
 ```
 
-MCP: `http://localhost:8080/mcp`
+The remote provider uses the authenticated Lichess Opening Explorer master database. Do not commit the token to GitHub.
 
-Health: `http://localhost:8080/health`
+## Syzygy
 
-## Docker local test
+For standard positions with seven or fewer pieces, the MCP queries the Lichess tablebase service. When the response is exact, `full_analysis` marks Syzygy as the authoritative source and returns its best tablebase move/result instead of treating Stockfish's heuristic score as final.
 
-The Docker build compiles the pinned stable Stockfish release from the official source repo.
+## Persistent player history
 
-```bash
-docker build -t chatgpt-stockfish-mcp .
-docker run --rm -p 8080:8080 --cpus=2 --memory=2g chatgpt-stockfish-mcp
+The GCP deployment script creates/reuses a dedicated runtime service account and a Firestore Native database. The service account receives `roles/datastore.user` so it can read and write only the configured chess history data allowed by project IAM.
+
+History is bounded per player (`HISTORY_MAX_EVENTS`, default 80) so one document does not grow forever.
+
+Example event fields include:
+
+```text
+position
+played move
+best move
+centipawn loss
+outcome
+short note
+recorded time
 ```
 
-Then:
+This allows future analysis to say things such as: "Objectively Nf5 is best; you have misplayed this structure before by exchanging that knight too early."
 
-```bash
-curl http://localhost:8080/health
-python scripts/test_remote.py http://localhost:8080/mcp
+## GCP defaults
+
+```text
+Cloud Run CPU          2 vCPU
+Startup CPU boost      enabled
+Memory                 2 GiB
+Concurrency            1
+Min instances          0
+Max instances          3
+Request timeout        30s
+Stockfish threads      2
+Stockfish hash         512 MB
+Max fixed engine call  15s
+Engine cache TTL       180s
+Context network cap    1200ms
+History backend        Firestore
 ```
 
-You can also use MCP Inspector and point it at `http://localhost:8080/mcp`.
+`min=0` keeps idle cost low. Startup CPU boost reduces cold-start pain without paying for a permanently warm instance.
 
-## Deploy to Google Cloud Run
-
-Authenticate and select a project:
+## Deploy
 
 ```bash
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
-```
-
-Then deploy:
-
-```bash
 PROJECT_ID=YOUR_PROJECT_ID ./scripts/deploy_gcp.sh
 ```
 
-The script enables Cloud Run, Cloud Build, and Artifact Registry APIs, then deploys from source.
+The deployment script enables Cloud Run, Cloud Build, Artifact Registry, IAM, and Firestore APIs; creates/reuses the runtime identity; creates the default Firestore database if needed; grants the runtime Firestore data role; and deploys the service.
 
-Default production configuration:
-
-```text
-CPU                   2 vCPU
-Startup CPU boost     enabled
-Memory                2 GiB
-Cloud Run concurrency 1
-Min instances         0
-Max instances         3
-Timeout               30s
-Stockfish Threads     2
-Stockfish Hash        512 MB
-Max engine search     15s per fixed tool call
-```
-
-`min=0` is intentional for this personal deployment: Cloud Run can scale to zero when idle, minimizing idle cost. Startup CPU boost is enabled to make those cold starts less painful without keeping an instance permanently warm.
-
-After deploy, obtain the URL:
+After deployment:
 
 ```bash
 gcloud run services describe victor-stockfish-mcp \
@@ -173,82 +155,56 @@ gcloud run services describe victor-stockfish-mcp \
   --format='value(status.url)'
 ```
 
-Your MCP URL is:
-
-```text
-https://YOUR-CLOUD-RUN-URL/mcp
-```
-
-## Connect Codex directly
+Then verify:
 
 ```bash
-codex mcp add victorStockfish --url https://YOUR-CLOUD-RUN-URL/mcp
-codex mcp list
+curl https://YOUR-SERVICE.run.app/health
+python scripts/test_remote.py https://YOUR-SERVICE.run.app/mcp
 ```
 
-For current OpenAI documentation inside Codex, it is useful to add:
+## GitHub Actions -> GCP
+
+Run after the initial GCP setup:
 
 ```bash
-codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp
+PROJECT_ID=YOUR_PROJECT_ID \
+GITHUB_REPO=MAVIS-creator/chess-mcp \
+./scripts/setup_github_wif.sh
 ```
 
-## Connect ChatGPT
+This configures Workload Identity Federation instead of a long-lived JSON key and grants the GitHub deployer permission to deploy revisions under the dedicated chess runtime identity.
 
-Use the same public HTTPS MCP endpoint when adding a custom MCP/plugin connection in a ChatGPT account/workspace that currently supports custom remote MCP servers.
-
-```text
-https://YOUR-CLOUD-RUN-URL/mcp
-```
-
-Availability and the exact ChatGPT UI can vary by plan/workspace, so verify the current OpenAI documentation/account UI rather than assuming the option is present.
-
-Once connected, a normal flow is:
-
-1. User sends a position or chess-board screenshot.
-2. Model converts the board to FEN.
-3. Model calls `validate_position`.
-4. Model calls `adaptive_analysis` with `normal` for ordinary positions.
-5. If the question is specifically about candidate moves, model calls `compare_moves`.
-6. Model explains the engine lines in human terms.
-
-## Security and cost warning
-
-The starter deployment uses `--allow-unauthenticated` because it is the simplest way for a remote MCP client to reach Cloud Run. The tools are read-only and only analyze chess positions, but **a public endpoint can still be abused to consume CPU and create GCP charges**.
-
-Mitigations already included:
-
-- scale to zero when idle (`min instances = 0`)
-- Cloud Run request timeout 30 seconds
-- max 15-second engine searches
-- max MultiPV 8
-- max depth 40
-- max nodes 50M
-- max Cloud Run instances 3
-- Cloud Run concurrency 1
-- adaptive analysis that only deepens when needed
-
-For a serious/private deployment, add compatible MCP authentication (OAuth or bearer-token based, depending on client support), quotas/rate limiting, and monitoring. Do not place credentials in tool descriptions, GitHub, or container images.
-
-## GitHub CI/CD
-
-`ci.yml` runs lint/tests on push and PR.
-
-`deploy-cloud-run.yml` deploys `main` to Cloud Run using Google Workload Identity Federation. It expects:
+The workflow expects:
 
 - `GCP_PROJECT_ID`
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_SERVICE_ACCOUNT`
 
-Prefer Workload Identity Federation over a long-lived service-account JSON key. After the GitHub repo exists, Codex can run:
+## Connect an MCP client
+
+Codex:
 
 ```bash
-PROJECT_ID=YOUR_PROJECT_ID GITHUB_REPO=MAVIS-creator/chess-mcp ./scripts/setup_github_wif.sh
+codex mcp add victorStockfish --url https://YOUR-SERVICE.run.app/mcp
+codex mcp list
 ```
 
-The script creates/reuses a GitHub OIDC workload-identity pool/provider, creates a dedicated deployer service account, grants the source-deploy roles, and writes the three GitHub Actions secrets when `gh` is authenticated.
+Use the same public HTTPS MCP URL in a ChatGPT workspace/account that supports custom remote MCP connections.
 
-## Example request after connection
+## Local validation
 
-> Analyze this FEN with the normal adaptive profile. If the top moves are close, confirm them more deeply and explain the practical difference.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+ruff check app tests
+pytest -q
+```
 
-That lets the model orchestrate Stockfish instead of blindly echoing one engine move.
+For a real local engine test, set `STOCKFISH_PATH` to a Stockfish binary or build/run the provided Docker image.
+
+## Security and fair-play notes
+
+The starter Cloud Run endpoint is public so remote MCP clients can reach it. CPU/search limits, max instances, caching, and scale-to-zero reduce risk, but a public compute endpoint can still be abused; add compatible MCP authentication/rate limiting before broader use.
+
+Do not use engine assistance during live games on platforms whose fair-play rules forbid it. This project is intended for analysis, study, training, and allowed use cases.
