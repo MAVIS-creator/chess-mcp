@@ -106,11 +106,11 @@ GCP_SERVICE_ACCOUNT=$DEPLOYER_SA
 GCP_RUNTIME_SERVICE_ACCOUNT=$RUNTIME_SA
 EOF
 
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh secret set GCP_PROJECT_ID --repo "$GITHUB_REPO" --body "$PROJECT_ID"
-  gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER --repo "$GITHUB_REPO" --body "$PROVIDER_NAME"
-  gh secret set GCP_SERVICE_ACCOUNT --repo "$GITHUB_REPO" --body "$DEPLOYER_SA"
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 && \
+  gh secret set GCP_PROJECT_ID --repo "$GITHUB_REPO" --body "$PROJECT_ID" && \
+  gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER --repo "$GITHUB_REPO" --body "$PROVIDER_NAME" && \
+  gh secret set GCP_SERVICE_ACCOUNT --repo "$GITHUB_REPO" --body "$DEPLOYER_SA"; then
   echo "GitHub Actions secrets were set on $GITHUB_REPO."
 else
-  echo "gh is not authenticated; set the three values above as GitHub repository secrets manually."
+  echo "GitHub Actions secrets could not be set; use the identifiers above as repository secrets or workflow configuration."
 fi
