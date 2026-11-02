@@ -20,6 +20,12 @@ LICHESS_TOKEN = os.getenv("LICHESS_TOKEN", "").strip()
 HISTORY_BACKEND = os.getenv("HISTORY_BACKEND", "none").strip().lower()
 HISTORY_COLLECTION = os.getenv("HISTORY_COLLECTION", "chess_player_history")
 HISTORY_MAX_EVENTS = max(10, min(int(os.getenv("HISTORY_MAX_EVENTS", "80")), 250))
+HISTORY_WRITES_ENABLED = os.getenv("HISTORY_WRITES_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def position_key(fen: str) -> str:
@@ -38,7 +44,7 @@ def _request_json(
     query = urllib.parse.urlencode(params)
     request = urllib.request.Request(
         f"{url}?{query}",
-        headers={"User-Agent": "chatgpt-stockfish-mcp/0.2", **(headers or {})},
+        headers={"User-Agent": "chatgpt-stockfish-mcp/0.3", **(headers or {})},
     )
     timeout_seconds = max(0.1, min(timeout_ms, 5000) / 1000.0)
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
@@ -139,15 +145,11 @@ class ContextSettings:
 
 
 class PlayerHistoryStore:
-    """Optional Firestore-backed personal chess history.
-
-    Firestore is intentionally lazy-loaded so the engine starts quickly and deployments that do not
-    enable history do not pay connection setup cost. History is advisory context only; it never
-    changes the objective Stockfish or tablebase result.
-    """
+    """Optional Firestore-backed personal chess history."""
 
     def __init__(self) -> None:
         self.enabled = HISTORY_BACKEND == "firestore"
+        self.writes_enabled = self.enabled and HISTORY_WRITES_ENABLED
         self._client: Any | None = None
         self._lock = threading.RLock()
 
@@ -188,6 +190,7 @@ class PlayerHistoryStore:
             ]
             return {
                 "enabled": True,
+                "writes_enabled": self.writes_enabled,
                 "backend": "firestore",
                 "player_id": safe_id,
                 "exact_position_events": exact,
@@ -197,9 +200,10 @@ class PlayerHistoryStore:
                     round(sum(losses) / len(losses), 1) if losses else None
                 ),
             }
-        except Exception as exc:  # provider failures must not block chess analysis
+        except Exception as exc:
             return {
                 "enabled": True,
+                "writes_enabled": self.writes_enabled,
                 "backend": "firestore",
                 "available": False,
                 "error": type(exc).__name__,
@@ -221,6 +225,14 @@ class PlayerHistoryStore:
             return {
                 "stored": False,
                 "reason": "HISTORY_BACKEND is not set to firestore",
+            }
+        if not self.writes_enabled:
+            return {
+                "stored": False,
+                "reason": (
+                    "History writes are disabled on this public deployment. Enable them only "
+                    "after compatible MCP authentication/rate limiting is configured."
+                ),
             }
         safe_id = self._safe_player_id(player_id)
         event = {
@@ -388,7 +400,12 @@ class ChessContextService:
 
     def history_context(self, player_id: str | None, fen: str) -> dict[str, Any]:
         if not player_id:
-            return {"enabled": self.history.enabled, "provided": False, "events": []}
+            return {
+                "enabled": self.history.enabled,
+                "writes_enabled": self.history.writes_enabled,
+                "provided": False,
+                "events": [],
+            }
         return self.history.get(player_id, fen)
 
 
