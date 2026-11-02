@@ -69,7 +69,7 @@ def adaptive_engine_analysis(
 def _future_value(future: Future[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
     try:
         return future.result(timeout=0)
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional provider failure must degrade gracefully
         return fallback
 
 
@@ -181,7 +181,6 @@ def full_chess_analysis(
 
     final_engine = confirmation or initial
 
-    # Context providers have strict internal timeouts, so these calls normally return instantly now.
     opening = _future_value(
         opening_future,
         {"available": False, "pending_or_failed": True},
