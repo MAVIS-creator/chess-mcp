@@ -6,6 +6,7 @@ GITHUB_REPO="${GITHUB_REPO:-}"   # owner/repo
 POOL_ID="${POOL_ID:-github}"
 PROVIDER_ID="${PROVIDER_ID:-github-provider}"
 DEPLOYER_SA_NAME="${DEPLOYER_SA_NAME:-github-cloud-run-deployer}"
+RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-chess-mcp-runtime}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
@@ -24,20 +25,25 @@ gcloud services enable \
   run.googleapis.com \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
+  firestore.googleapis.com \
+  iam.googleapis.com \
   iamcredentials.googleapis.com \
   sts.googleapis.com
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 DEPLOYER_SA="${DEPLOYER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 if ! gcloud iam service-accounts describe "$DEPLOYER_SA" >/dev/null 2>&1; then
   gcloud iam service-accounts create "$DEPLOYER_SA_NAME" \
     --display-name="GitHub Cloud Run deployer"
 fi
+if ! gcloud iam service-accounts describe "$RUNTIME_SA" >/dev/null 2>&1; then
+  gcloud iam service-accounts create "$RUNTIME_SA_NAME" \
+    --display-name="Chess MCP runtime"
+fi
 
-# Permissions for deploying source revisions. The initial deployment script sets public IAM once;
-# CI intentionally does not change unauthenticated/public access on every push.
 for ROLE in roles/run.sourceDeveloper roles/serviceusage.serviceUsageConsumer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${DEPLOYER_SA}" \
@@ -45,13 +51,18 @@ for ROLE in roles/run.sourceDeveloper roles/serviceusage.serviceUsageConsumer; d
     --quiet >/dev/null
 done
 
-# Let the deployer act as the default Cloud Run runtime identity.
-gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/datastore.user" \
+  --quiet >/dev/null
+
+# Let GitHub deploy Cloud Run revisions under the dedicated runtime identity.
+gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
   --member="serviceAccount:${DEPLOYER_SA}" \
   --role="roles/iam.serviceAccountUser" \
   --quiet >/dev/null
 
-# Let the build service account build/deploy source containers.
+# Let the source-build service account build the container image.
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${COMPUTE_SA}" \
   --role="roles/run.builder" \
@@ -92,6 +103,7 @@ WIF configured.
 GCP_PROJECT_ID=$PROJECT_ID
 GCP_WORKLOAD_IDENTITY_PROVIDER=$PROVIDER_NAME
 GCP_SERVICE_ACCOUNT=$DEPLOYER_SA
+GCP_RUNTIME_SERVICE_ACCOUNT=$RUNTIME_SA
 EOF
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
