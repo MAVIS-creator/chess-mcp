@@ -22,6 +22,55 @@ User -> ChatGPT/Codex -> HTTPS MCP -> Cloud Run -> Stockfish 19 -> structured li
 
 Cloud Run is intentionally configured with request concurrency `1` because each container owns one Stockfish process. Autoscaling creates additional containers when necessary.
 
+## Latency target
+
+The service is tuned so **30 seconds is a hard infrastructure ceiling, not a normal response target**.
+
+Typical engine-side targets are:
+
+```text
+quick    ~0.5-2s
+normal   ~1.2-5s
+deep     ~3-12s
+hard Cloud Run request ceiling: 30s
+```
+
+Cloud Run uses `min=0` to avoid idle spend and enables startup CPU boost to reduce cold-start latency. With 2 configured vCPUs, Cloud Run can temporarily provide extra startup CPU while the container starts. A cold request may still be slower than a warm one, so end-to-end ChatGPT latency cannot be guaranteed exactly, but the MCP itself is deliberately budgeted well below 30 seconds.
+
+## Planned full chess-brain pipeline
+
+The long-term orchestration target is:
+
+```text
+                    Chess request
+                         |
+                         v
+                  ChatGPT / model
+                         |
+          +--------------+--------------+
+          |              |              |
+          v              v              v
+   Opening/Game DB    Stockfish      Player history
+          |              |              |
+          |              v              |
+          |       adaptive_analysis     |
+          |              |              |
+          +--------------+--------------+
+                         |
+                         v
+                 Syzygy tablebase
+                         |
+                         v
+                   Model reasoning
+                         |
+                         v
+                Final recommendation
+```
+
+Independent lookups should run **in parallel**, not serially. A future orchestration layer should reserve a few seconds of the 30-second ceiling for network/model overhead and cancel optional lookups when their deadline expires. Tablebase results, when available, are exact and should override heuristic engine evaluation for that endgame position.
+
+For low latency, avoid putting huge game or Syzygy datasets directly in the Cloud Run image. Prefer a compact local opening index/cache plus bounded remote/storage lookups, with aggressive caching of repeated FENs.
+
 ## How the adaptive analysis works
 
 For ordinary analysis, prefer `adaptive_analysis` instead of immediately asking for a long fixed search.
@@ -36,7 +85,7 @@ deep    initial 3.0s, confirmation 8.0s, MultiPV 5
 
 The first pass checks several candidate moves. If the top two are within the configured centipawn gap (35 cp by default) and no forced mate is already visible, the MCP runs a deeper search restricted to those two moves. Obvious positions therefore stay cheap, while unclear positions get extra calculation.
 
-This is not online learning. Stockfish uses its shipped NNUE evaluation network plus search; it does not permanently learn from each request or from your games while this service is running. If we later want a richer chess system, the best additions are opening/game retrieval, Syzygy tablebases, and model-side orchestration rather than trying to retrain Stockfish on every game.
+This is not online learning. Stockfish uses its shipped NNUE evaluation network plus search; it does not permanently learn from each request or from your games while this service is running. If we later want personalization, keep player/game history outside Stockfish and retrieve it as context alongside objective engine calculation.
 
 ## Requirements
 
@@ -103,17 +152,18 @@ Default production configuration:
 
 ```text
 CPU                   2 vCPU
+Startup CPU boost     enabled
 Memory                2 GiB
 Cloud Run concurrency 1
 Min instances         0
 Max instances         3
-Timeout               60s
+Timeout               30s
 Stockfish Threads     2
 Stockfish Hash        512 MB
-Max engine search     15s per tool call
+Max engine search     15s per fixed tool call
 ```
 
-`min=0` is intentional for this personal deployment: Cloud Run can scale to zero when idle, minimizing idle cost. A cold request can therefore take a little longer while a container starts.
+`min=0` is intentional for this personal deployment: Cloud Run can scale to zero when idle, minimizing idle cost. Startup CPU boost is enabled to make those cold starts less painful without keeping an instance permanently warm.
 
 After deploy, obtain the URL:
 
@@ -168,7 +218,8 @@ The starter deployment uses `--allow-unauthenticated` because it is the simplest
 Mitigations already included:
 
 - scale to zero when idle (`min instances = 0`)
-- max 15-second analysis calls
+- Cloud Run request timeout 30 seconds
+- max 15-second engine searches
 - max MultiPV 8
 - max depth 40
 - max nodes 50M
