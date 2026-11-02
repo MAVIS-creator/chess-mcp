@@ -37,16 +37,18 @@ Work autonomously as far as permissions allow. Do not invent credentials. If an 
 6. Deploy using `scripts/deploy_gcp.sh` or equivalent current `gcloud run deploy --source .` commands.
 7. Keep these safety/performance defaults unless the user explicitly changes them:
    - 2 vCPU
+   - startup CPU boost enabled
    - 2 GiB RAM
    - concurrency 1
    - min instances 0 so the service can scale to zero when idle
    - max instances 3
-   - timeout 60s
+   - Cloud Run request timeout 30s
    - Stockfish threads 2
    - Stockfish hash 512 MB
-   - max analysis time 15s
-8. Public unauthenticated invocation is acceptable for this first read-only chess-analysis deployment, but clearly report that this can be abused and create GCP cost. Do not expose any secrets. If the user wants stronger security, implement OAuth/bearer-token protection compatible with the chosen MCP client instead of relying on obscurity.
-9. Capture the deployed service URL and verify:
+   - max fixed engine analysis time 15s
+8. Treat 30 seconds as a hard ceiling, not a target. Prefer `adaptive_analysis` so ordinary positions finish in a few seconds and only difficult positions receive a longer confirmation search.
+9. Public unauthenticated invocation is acceptable for this first read-only chess-analysis deployment, but clearly report that this can be abused and create GCP cost. Do not expose any secrets. If the user wants stronger security, implement OAuth/bearer-token protection compatible with the chosen MCP client instead of relying on obscurity.
+10. Capture the deployed service URL and verify:
    - `GET <URL>/health`
    - MCP initialize/tool listing at `<URL>/mcp`
    - a real `adaptive_analysis` call
@@ -82,7 +84,15 @@ then verify with:
 
 For ChatGPT, explain that the same MCP URL should be added as a custom MCP/plugin connection in a ChatGPT workspace/account that currently supports custom remote MCP connections. Do not claim the feature exists for an account without checking current OpenAI documentation/account UI.
 
-## 7. Final verification report
+## 7. Future chess-brain orchestration
+When extending beyond Stockfish, preserve the latency design from `README.md`:
+- opening/game retrieval, Stockfish, player-history lookup, and tablebase lookup should run in parallel when independent
+- use tight per-source timeouts and graceful fallback
+- tablebase results are exact and should override heuristic engine evaluation when applicable
+- do not package massive game databases or full Syzygy sets directly into the latency-sensitive Cloud Run image
+- keep enough of the 30-second ceiling available for network and model reasoning rather than consuming all of it in engine search
+
+## 8. Final verification report
 Return:
 - GitHub repo URL
 - Cloud Run service URL
@@ -93,7 +103,7 @@ Return:
 - CI/CD status
 - whether Codex MCP connection was added
 - whether ChatGPT connection still needs a manual account/UI step
-- estimated cost-sensitive settings (min/max instances, CPU, memory)
+- estimated cost-sensitive settings (min/max instances, CPU, memory, CPU boost, timeout)
 - any permissions or login steps that could not be completed
 
 Do not stop after generating commands; execute everything you are permitted to execute and verify the live service.
