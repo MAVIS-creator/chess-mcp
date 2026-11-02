@@ -1,0 +1,1 @@
+"""Victor Stockfish MCP server."""

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "victor-stockfish-mcp"
+version = "0.1.0"
+description = "Remote MCP server exposing Stockfish chess analysis for ChatGPT, Codex, and other MCP clients."
+requires-python = ">=3.11"
+dependencies = [
+  "fastmcp==4.1.5",
+  "python-chess==1.999",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

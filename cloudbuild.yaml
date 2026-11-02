@@ -1,0 +1,24 @@
+substitutions:
+  _SERVICE: victor-stockfish-mcp
+  _REGION: us-central1
+
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy "${_SERVICE}" \
+          --source . \
+          --region "${_REGION}" \
+          --allow-unauthenticated \
+          --cpu 2 \
+          --memory 2Gi \
+          --concurrency 1 \
+          --timeout 60 \
+          --min 1 \
+          --max 3 \
+          --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
