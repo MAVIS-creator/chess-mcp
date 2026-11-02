@@ -4,7 +4,7 @@ import os
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import chess
 import chess.engine
@@ -13,6 +13,26 @@ MAX_TIME_MS = int(os.getenv("MAX_ANALYSIS_MS", "15000"))
 MAX_MULTIPV = int(os.getenv("MAX_MULTIPV", "8"))
 MAX_DEPTH = int(os.getenv("MAX_DEPTH", "40"))
 MAX_NODES = int(os.getenv("MAX_NODES", "50000000"))
+
+AnalysisProfile = Literal["quick", "normal", "deep"]
+
+ANALYSIS_PROFILES: dict[AnalysisProfile, dict[str, int]] = {
+    "quick": {
+        "initial_time_ms": 500,
+        "confirm_time_ms": 1500,
+        "multipv": 2,
+    },
+    "normal": {
+        "initial_time_ms": 1200,
+        "confirm_time_ms": 3500,
+        "multipv": 4,
+    },
+    "deep": {
+        "initial_time_ms": 3000,
+        "confirm_time_ms": 8000,
+        "multipv": 5,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,16 @@ class StockfishService:
             raise ValueError(f"Illegal or unrecognized move '{move_text}'. Use SAN or UCI.") from exc
 
     @staticmethod
+    def profile_settings(profile: AnalysisProfile) -> dict[str, int]:
+        if profile not in ANALYSIS_PROFILES:
+            raise ValueError(f"Unknown analysis profile: {profile}")
+        settings = dict(ANALYSIS_PROFILES[profile])
+        settings["initial_time_ms"] = min(settings["initial_time_ms"], MAX_TIME_MS)
+        settings["confirm_time_ms"] = min(settings["confirm_time_ms"], MAX_TIME_MS)
+        settings["multipv"] = min(settings["multipv"], MAX_MULTIPV)
+        return settings
+
+    @staticmethod
     def _normalize_limits(
         *,
         time_ms: int | None = None,
@@ -153,6 +183,31 @@ class StockfishService:
             "pv": self._pv_payload(board, pv),
         }
 
+    def _run_analysis(
+        self,
+        board: chess.Board,
+        limit: chess.engine.Limit,
+        *,
+        multipv: int,
+        root_moves: list[chess.Move] | None,
+    ) -> list[dict[str, Any]]:
+        """Run one engine search and recover once if the Stockfish process died."""
+        for attempt in range(2):
+            try:
+                engine = self._ensure_engine()
+                result = engine.analyse(
+                    board,
+                    limit,
+                    multipv=multipv,
+                    root_moves=root_moves,
+                )
+                return result if isinstance(result, list) else [result]
+            except (chess.engine.EngineError, chess.engine.EngineTerminatedError):
+                self.close()
+                if attempt == 1:
+                    raise
+        raise RuntimeError("Stockfish analysis failed unexpectedly.")
+
     def analyze(
         self,
         fen: str,
@@ -170,17 +225,16 @@ class StockfishService:
         parsed_root_moves: list[chess.Move] | None = None
         if root_moves:
             parsed_root_moves = [self.parse_move(board, move) for move in root_moves]
+            safe_multipv = min(safe_multipv, len(parsed_root_moves))
 
         with self._lock:
-            engine = self._ensure_engine()
-            result = engine.analyse(
+            infos = self._run_analysis(
                 board,
                 limit,
                 multipv=safe_multipv,
                 root_moves=parsed_root_moves,
             )
 
-        infos = result if isinstance(result, list) else [result]
         lines = [self._info_payload(board, info) for info in infos]
         return {
             "fen": board.fen(),
@@ -199,29 +253,38 @@ class StockfishService:
         if len(moves) > MAX_MULTIPV:
             raise ValueError(f"At most {MAX_MULTIPV} candidate moves can be compared at once.")
 
-        candidates = []
+        requested_by_uci: dict[str, str] = {}
+        root_moves: list[str] = []
         for move_text in moves:
             move = self.parse_move(board, move_text)
-            san = board.san(move)
-            analysis = self.analyze(
-                fen,
-                time_ms=time_ms,
-                multipv=1,
-                root_moves=[move.uci()],
+            uci = move.uci()
+            if uci in requested_by_uci:
+                continue
+            requested_by_uci[uci] = board.san(move)
+            root_moves.append(uci)
+
+        analysis = self.analyze(
+            fen,
+            time_ms=time_ms,
+            multipv=len(root_moves),
+            root_moves=root_moves,
+        )
+
+        ranking = []
+        for line in analysis["lines"]:
+            move_uci = line.get("move_uci")
+            ranking.append(
+                {
+                    "requested_move": requested_by_uci.get(str(move_uci)),
+                    "requested_move_uci": move_uci,
+                    **line,
+                }
             )
-            line = analysis["lines"][0]
-            candidates.append({"requested_move": san, "requested_move_uci": move.uci(), **line})
 
-        def score_key(item: dict[str, Any]) -> int:
-            score = item.get("score") or {}
-            value = score.get("numeric_for_sorting")
-            return -1000000 if value is None else int(value)
-
-        candidates.sort(key=score_key, reverse=True)
         return {
             "fen": board.fen(),
             "turn": "white" if board.turn == chess.WHITE else "black",
-            "ranking": candidates,
+            "ranking": ranking,
         }
 
     def status(self) -> dict[str, Any]:
@@ -233,6 +296,7 @@ class StockfishService:
                 "path": self.settings.path,
                 "threads": self.settings.threads,
                 "hash_mb": self.settings.hash_mb,
+                "analysis_profiles": ANALYSIS_PROFILES,
                 "limits": {
                     "max_analysis_ms": MAX_TIME_MS,
                     "max_multipv": MAX_MULTIPV,
