@@ -27,7 +27,7 @@ COPY --from=stockfish-builder /src/Stockfish/src/stockfish /usr/local/bin/stockf
 WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && chmod -R a+rX /app
 USER appuser
 EXPOSE 8080
 CMD ["python", "-m", "app.server"]
