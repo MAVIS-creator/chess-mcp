@@ -42,7 +42,8 @@ Work autonomously as far as permissions allow. Do not invent credentials. Stop o
    - Stockfish hash 512 MB
    - max fixed engine call 15s
    - context provider timeout around 1200ms
-   - Firestore history enabled
+   - Firestore history reads enabled
+   - `HISTORY_WRITES_ENABLED=false` on the public unauthenticated deployment
 6. Treat 30 seconds as a hard ceiling, not a target. `full_analysis` should normally finish much sooner.
 7. Do not put credentials or Lichess tokens in GitHub or the image.
 
@@ -62,8 +63,11 @@ After deployment, capture the Cloud Run URL and verify all of the following:
    - tablebase applicability result
    - player-history section
 5. `tablebase_lookup` on a valid <=7-piece position returns an exact Syzygy result when supported.
-6. `record_player_event` stores a test event for a temporary player ID, then `player_history` can read it back. Remove/ignore the temporary test data afterward if practical.
-7. Repeating an identical Stockfish request on the same warm instance should show the engine cache being used where applicable.
+6. On the default public deployment, call `record_player_event` and verify it is safely rejected because history writes are disabled.
+7. Verify `player_history` reads cleanly even when there are no stored events.
+8. Repeating an identical Stockfish request on the same warm instance should show the engine cache being used where applicable.
+
+Do **not** enable `HISTORY_WRITES_ENABLED=true` on a public unauthenticated MCP endpoint just to make the write test pass. Only enable persistent writes after compatible MCP authentication and rate limiting are configured. Once that protection exists, enable writes and then verify a temporary event can be stored and read back.
 
 ## 6. GitHub Actions -> GCP
 Run/inspect `scripts/setup_github_wif.sh` with:
@@ -109,7 +113,7 @@ Return:
 - Stockfish version
 - `full_analysis` measured latency
 - tablebase verification result
-- Firestore history read/write verification
+- Firestore history read status and write-gate status
 - local/CI test results
 - GitHub Actions deployment result
 - whether Codex MCP was connected
