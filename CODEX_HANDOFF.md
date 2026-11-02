@@ -1,4 +1,4 @@
-# Codex handoff — build, deploy, connect, and push Victor Stockfish MCP
+# Codex handoff — build, deploy, connect, and push ChatGPT Stockfish MCP
 
 Copy the prompt below into Codex from the root of this repository.
 
@@ -39,7 +39,7 @@ Work autonomously as far as permissions allow. Do not invent credentials. If an 
    - 2 vCPU
    - 2 GiB RAM
    - concurrency 1
-   - min instances 1
+   - min instances 0 so the service can scale to zero when idle
    - max instances 3
    - timeout 60s
    - Stockfish threads 2
@@ -49,12 +49,13 @@ Work autonomously as far as permissions allow. Do not invent credentials. If an 
 9. Capture the deployed service URL and verify:
    - `GET <URL>/health`
    - MCP initialize/tool listing at `<URL>/mcp`
-   - a real `analyze_position` call.
+   - a real `adaptive_analysis` call
+   - a real `analyze_position` call
 
 ## 4. GitHub repository
 1. Check whether this directory already has a remote.
 2. If it does not, use GitHub CLI (`gh`) if available. Authenticate with `gh auth login` if needed.
-3. Create a repository named `victor-stockfish-mcp` under the user's currently authenticated GitHub account unless a different repo name is already established.
+3. Use the already-established repository name when one exists; otherwise create `chess-mcp` under the user's authenticated GitHub account.
 4. Default visibility: PRIVATE unless the user has already explicitly said public.
 5. Initialize git if needed, commit all safe files, and push `main`.
 6. Never commit `.env`, GCP credential JSON, access tokens, or other secrets.
