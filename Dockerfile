@@ -3,7 +3,7 @@
 FROM debian:bookworm-slim AS stockfish-builder
 ARG STOCKFISH_TAG=sf_19
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git build-essential && \
+    ca-certificates curl git build-essential && \
     rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "${STOCKFISH_TAG}" \
     https://github.com/official-stockfish/Stockfish.git /src/Stockfish
