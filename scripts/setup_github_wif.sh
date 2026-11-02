@@ -81,7 +81,7 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
   gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
     --location=global \
     --workload-identity-pool="$POOL_ID" \
-    --display-name="GitHub provider for ${GITHUB_REPO}" \
+    --display-name="GitHub Actions provider" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
     --attribute-condition="assertion.repository == '${GITHUB_REPO}'"
