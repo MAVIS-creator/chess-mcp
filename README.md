@@ -5,11 +5,12 @@ A remote MCP server that gives ChatGPT, Codex, and other MCP clients direct acce
 ## What it exposes
 
 - `validate_position(fen)` — validates FEN and returns legal moves.
-- `analyze_position(fen, time_ms, multipv, depth, nodes)` — ranked Stockfish lines.
-- `compare_moves(fen, moves, time_ms)` — compares user/model candidate moves.
+- `analyze_position(fen, time_ms, multipv, depth, nodes)` — fixed-budget ranked Stockfish lines.
+- `adaptive_analysis(fen, profile, close_gap_cp)` — starts cheaply and deepens only when the top moves are close.
+- `compare_moves(fen, moves, time_ms)` — compares specific candidates in one restricted MultiPV search.
 - `analyze_move(fen, move, time_ms)` — audits one move versus Stockfish's best.
 - `tactical_scan(fen, time_ms, multipv, mode)` — deeper MultiPV scan plus tactical signals.
-- `engine_status()` — engine version/config/limits.
+- `engine_status()` — engine version/config/profiles/limits.
 
 The MCP endpoint is `/mcp`; the health endpoint is `/health`.
 
@@ -21,13 +22,29 @@ User -> ChatGPT/Codex -> HTTPS MCP -> Cloud Run -> Stockfish 19 -> structured li
 
 Cloud Run is intentionally configured with request concurrency `1` because each container owns one Stockfish process. Autoscaling creates additional containers when necessary.
 
+## How the adaptive analysis works
+
+For ordinary analysis, prefer `adaptive_analysis` instead of immediately asking for a long fixed search.
+
+Profiles:
+
+```text
+quick   initial 0.5s, confirmation 1.5s, MultiPV 2
+normal  initial 1.2s, confirmation 3.5s, MultiPV 4
+deep    initial 3.0s, confirmation 8.0s, MultiPV 5
+```
+
+The first pass checks several candidate moves. If the top two are within the configured centipawn gap (35 cp by default) and no forced mate is already visible, the MCP runs a deeper search restricted to those two moves. Obvious positions therefore stay cheap, while unclear positions get extra calculation.
+
+This is not online learning. Stockfish uses its shipped NNUE evaluation network plus search; it does not permanently learn from each request or from your games while this service is running. If we later want a richer chess system, the best additions are opening/game retrieval, Syzygy tablebases, and model-side orchestration rather than trying to retrain Stockfish on every game.
+
 ## Requirements
 
 - Python 3.11+ for local development.
 - Docker for the easiest local test.
 - Google Cloud CLI (`gcloud`) for deployment.
 - A Google Cloud project with billing enabled.
-- Git/GitHub CLI if you want Codex to create/push the GitHub repository automatically.
+- Git/GitHub CLI if you want Codex to configure deployment automatically.
 
 ## Local Python development
 
@@ -52,8 +69,8 @@ Health: `http://localhost:8080/health`
 The Docker build compiles the pinned stable Stockfish release from the official source repo.
 
 ```bash
-docker build -t victor-stockfish-mcp .
-docker run --rm -p 8080:8080 --cpus=2 --memory=2g victor-stockfish-mcp
+docker build -t chatgpt-stockfish-mcp .
+docker run --rm -p 8080:8080 --cpus=2 --memory=2g chatgpt-stockfish-mcp
 ```
 
 Then:
@@ -85,18 +102,18 @@ The script enables Cloud Run, Cloud Build, and Artifact Registry APIs, then depl
 Default production configuration:
 
 ```text
-CPU                 2 vCPU
-Memory              2 GiB
+CPU                   2 vCPU
+Memory                2 GiB
 Cloud Run concurrency 1
-Min instances       1
-Max instances       3
-Timeout              60s
-Stockfish Threads    2
-Stockfish Hash       512 MB
-Max engine search    15s per tool call
+Min instances         0
+Max instances         3
+Timeout               60s
+Stockfish Threads     2
+Stockfish Hash        512 MB
+Max engine search     15s per tool call
 ```
 
-`min=1` makes the service feel much more immediate by keeping one instance warm, but it costs money while idle. Set min instances to `0` if low cost matters more than cold-start latency.
+`min=0` is intentional for this personal deployment: Cloud Run can scale to zero when idle, minimizing idle cost. A cold request can therefore take a little longer while a container starts.
 
 After deploy, obtain the URL:
 
@@ -140,8 +157,8 @@ Once connected, a normal flow is:
 1. User sends a position or chess-board screenshot.
 2. Model converts the board to FEN.
 3. Model calls `validate_position`.
-4. Model calls `analyze_position`, usually 1–3 seconds and MultiPV 3–5.
-5. If candidate moves are close, model calls `compare_moves` or re-runs a deeper search.
+4. Model calls `adaptive_analysis` with `normal` for ordinary positions.
+5. If the question is specifically about candidate moves, model calls `compare_moves`.
 6. Model explains the engine lines in human terms.
 
 ## Security and cost warning
@@ -150,12 +167,14 @@ The starter deployment uses `--allow-unauthenticated` because it is the simplest
 
 Mitigations already included:
 
+- scale to zero when idle (`min instances = 0`)
 - max 15-second analysis calls
 - max MultiPV 8
 - max depth 40
 - max nodes 50M
 - max Cloud Run instances 3
 - Cloud Run concurrency 1
+- adaptive analysis that only deepens when needed
 
 For a serious/private deployment, add compatible MCP authentication (OAuth or bearer-token based, depending on client support), quotas/rate limiting, and monitoring. Do not place credentials in tool descriptions, GitHub, or container images.
 
@@ -172,13 +191,13 @@ For a serious/private deployment, add compatible MCP authentication (OAuth or be
 Prefer Workload Identity Federation over a long-lived service-account JSON key. After the GitHub repo exists, Codex can run:
 
 ```bash
-PROJECT_ID=YOUR_PROJECT_ID GITHUB_REPO=OWNER/victor-stockfish-mcp ./scripts/setup_github_wif.sh
+PROJECT_ID=YOUR_PROJECT_ID GITHUB_REPO=MAVIS-creator/chess-mcp ./scripts/setup_github_wif.sh
 ```
 
 The script creates/reuses a GitHub OIDC workload-identity pool/provider, creates a dedicated deployer service account, grants the source-deploy roles, and writes the three GitHub Actions secrets when `gh` is authenticated.
 
 ## Example request after connection
 
-> Analyze this FEN. Start with a 1.5-second MultiPV 5 search. If the top two moves are within 0.20, compare them with a 5-second search and explain the practical difference.
+> Analyze this FEN with the normal adaptive profile. If the top moves are close, confirm them more deeply and explain the practical difference.
 
-That lets the model orchestrate Stockfish rather than blindly echoing one engine move.
+That lets the model orchestrate Stockfish instead of blindly echoing one engine move.
