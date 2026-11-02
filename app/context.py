@@ -47,11 +47,11 @@ def _request_json(
         headers={"User-Agent": "chatgpt-stockfish-mcp/0.3", **(headers or {})},
     )
     timeout_seconds = max(0.1, min(timeout_ms, 5000) / 1000.0)
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         payload = response.read(1_000_000)
     parsed = json.loads(payload)
     if not isinstance(parsed, dict):
-        raise ValueError("Expected a JSON object from chess context provider.")
+        raise TypeError("Expected a JSON object from chess context provider.")
     return parsed
 
 
@@ -200,7 +200,7 @@ class PlayerHistoryStore:
                     round(sum(losses) / len(losses), 1) if losses else None
                 ),
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - context failure must not block analysis
             return {
                 "enabled": True,
                 "writes_enabled": self.writes_enabled,
@@ -255,7 +255,7 @@ class PlayerHistoryStore:
             events = events[-HISTORY_MAX_EVENTS:]
             document.set({"events": events, "updated_at_epoch": int(time.time())}, merge=True)
             return {"stored": True, "player_id": safe_id, "event": event}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - provider failure is returned as tool data
             return {"stored": False, "error": type(exc).__name__}
 
 
@@ -325,7 +325,7 @@ class ChessContextService:
                 "local_fallback": local,
                 "remote_available": True,
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - remote context is optional
             result = {
                 **local,
                 "remote_available": False,
@@ -387,7 +387,7 @@ class ChessContextService:
                 "moves": moves,
                 "source": "lichess-syzygy",
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - tablebase outage must not block Stockfish
             result = {
                 "applicable": True,
                 "available": False,
