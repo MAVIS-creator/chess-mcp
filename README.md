@@ -1,4 +1,4 @@
-# Victor Stockfish MCP
+# ChatGPT Stockfish MCP
 
 A remote MCP server that gives ChatGPT, Codex, and other MCP clients direct access to **Stockfish 19** chess calculation.
 
@@ -176,21 +176,6 @@ PROJECT_ID=YOUR_PROJECT_ID GITHUB_REPO=OWNER/victor-stockfish-mcp ./scripts/setu
 ```
 
 The script creates/reuses a GitHub OIDC workload-identity pool/provider, creates a dedicated deployer service account, grants the source-deploy roles, and writes the three GitHub Actions secrets when `gh` is authenticated.
-
-## Let Codex finish the setup for you
-
-Open this repository in Codex and give it the instructions in [`CODEX_HANDOFF.md`](CODEX_HANDOFF.md). The handoff explicitly tells Codex to:
-
-- verify the code
-- install/configure `gcloud` if needed
-- log into GCP when human authorization is required
-- enable APIs
-- deploy Cloud Run
-- verify the live MCP server
-- create/push the GitHub repo
-- configure GitHub Actions with Workload Identity Federation where permissions allow
-- add the MCP server to Codex
-- report the exact URLs and anything that still requires a manual ChatGPT UI step
 
 ## Example request after connection
 
