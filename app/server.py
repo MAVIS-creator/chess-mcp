@@ -10,14 +10,16 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.engine import service
+from app.engine import AnalysisProfile, service
 
 mcp = FastMCP(
-    "Victor Stockfish",
+    "ChatGPT Stockfish",
     instructions=(
-        "Use these tools for objective chess calculation. Prefer analyze_position for a fresh position, "
-        "compare_moves when specific candidate moves matter, and analyze_move to audit a move. "
-        "Scores are always reported from the side-to-move perspective in the supplied FEN."
+        "Use these tools for objective chess calculation. Prefer adaptive_analysis for normal "
+        "position analysis because it starts cheaply and only spends more compute when candidate "
+        "moves are close. Use analyze_position for a fixed search, compare_moves when specific "
+        "candidate moves matter, and analyze_move to audit a move. Scores are always reported "
+        "from the side-to-move perspective in the supplied FEN."
     ),
 )
 
@@ -75,11 +77,72 @@ def analyze_position(
 
 
 @mcp.tool
+def adaptive_analysis(
+    fen: str,
+    profile: AnalysisProfile = "normal",
+    close_gap_cp: int = 35,
+) -> dict:
+    """Analyze efficiently, deepening only when the best candidate moves are close.
+
+    Profiles are quick, normal, and deep. The first pass is deliberately inexpensive. If the top
+    two engine moves are within close_gap_cp centipawns and there is no forced mate, the tool
+    rechecks those two candidates with a longer restricted search. This usually gives a stronger
+    answer without paying deep-search cost on obvious positions.
+    """
+    settings = service.profile_settings(profile)
+    initial = service.analyze(
+        fen,
+        time_ms=settings["initial_time_ms"],
+        multipv=settings["multipv"],
+    )
+    lines = initial["lines"]
+
+    gap_cp = None
+    forced_mate = False
+    if lines:
+        forced_mate = (lines[0].get("score") or {}).get("mate_in") is not None
+    if len(lines) >= 2:
+        first = (lines[0].get("score") or {}).get("numeric_for_sorting")
+        second = (lines[1].get("score") or {}).get("numeric_for_sorting")
+        if first is not None and second is not None:
+            gap_cp = int(first) - int(second)
+
+    confirmation = None
+    reason = "initial search was decisive enough"
+    threshold = max(0, min(int(close_gap_cp), 300))
+
+    if not forced_mate and gap_cp is not None and gap_cp <= threshold:
+        candidates = [line.get("move_uci") for line in lines[:2] if line.get("move_uci")]
+        if len(candidates) >= 2:
+            confirmation = service.analyze(
+                fen,
+                time_ms=settings["confirm_time_ms"],
+                multipv=len(candidates),
+                root_moves=[str(move) for move in candidates],
+            )
+            reason = "top moves were close, so a deeper restricted confirmation search was run"
+
+    final = confirmation or initial
+    return {
+        "profile": profile,
+        "profile_settings": settings,
+        "close_gap_threshold_cp": threshold,
+        "initial_top_two_gap_cp": gap_cp,
+        "used_confirmation_search": confirmation is not None,
+        "decision_reason": reason,
+        "initial": initial,
+        "confirmation": confirmation,
+        "final": final,
+    }
+
+
+@mcp.tool
 def compare_moves(fen: str, moves: list[str], time_ms: int = 2000) -> dict:
-    """Compare specific legal candidate moves using Stockfish.
+    """Compare specific legal candidate moves using one restricted Stockfish search.
 
     Moves may be supplied in SAN (Nf5, Bxh7+) or UCI (g1f3). Results are ranked from the
-    current side-to-move perspective.
+    current side-to-move perspective. Comparing them in one MultiPV search is fairer and cheaper
+    than running a separate full search for every candidate.
     """
     return service.compare_moves(fen, moves, time_ms=time_ms)
 
@@ -99,11 +162,11 @@ def analyze_move(fen: str, move: str, time_ms: int = 2000) -> dict:
 
     best_score = best["lines"][0].get("score") or {}
     played_score = played_line["lines"][0].get("score") or {}
-    b = best_score.get("numeric_for_sorting")
-    p = played_score.get("numeric_for_sorting")
+    best_numeric = best_score.get("numeric_for_sorting")
+    played_numeric = played_score.get("numeric_for_sorting")
     loss_cp = None
-    if b is not None and p is not None:
-        loss_cp = max(0, int(b) - int(p))
+    if best_numeric is not None and played_numeric is not None:
+        loss_cp = max(0, int(best_numeric) - int(played_numeric))
 
     return {
         "fen": board.fen(),
@@ -151,7 +214,7 @@ def tactical_scan(
 
 @mcp.tool
 def engine_status() -> dict:
-    """Return Stockfish version/configuration and server safety limits."""
+    """Return Stockfish version/configuration, analysis profiles, and server safety limits."""
     return service.status()
 
 
