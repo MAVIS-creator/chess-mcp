@@ -77,6 +77,8 @@ class StockfishService:
             if self._engine is not None:
                 try:
                     self._engine.quit()
+                except (chess.engine.EngineError, OSError):
+                    pass
                 finally:
                     self._engine = None
 
@@ -202,7 +204,7 @@ class StockfishService:
                     root_moves=root_moves,
                 )
                 return result if isinstance(result, list) else [result]
-            except (chess.engine.EngineError, chess.engine.EngineTerminatedError):
+            except (chess.engine.EngineError, OSError):
                 self.close()
                 if attempt == 1:
                     raise
