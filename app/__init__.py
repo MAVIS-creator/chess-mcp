@@ -1,1 +1,1 @@
-"""Victor Stockfish MCP server."""
+"""ChatGPT Stockfish MCP server."""

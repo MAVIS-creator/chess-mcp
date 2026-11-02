@@ -160,7 +160,7 @@ The deployment script enables Cloud Run, Cloud Build, Artifact Registry, IAM, an
 After deployment:
 
 ```bash
-gcloud run services describe victor-stockfish-mcp \
+gcloud run services describe chatgpt-stockfish \
   --region us-central1 \
   --format='value(status.url)'
 ```

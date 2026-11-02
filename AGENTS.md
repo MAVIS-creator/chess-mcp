@@ -26,7 +26,7 @@ Maintain and deploy the ChatGPT Stockfish remote chess MCP. The preferred path c
 - Run `ruff check app tests` and `pytest -q` before pushing.
 
 ## Default GCP settings
-- Service: `victor-stockfish-mcp`
+- Service: `chatgpt-stockfish`
 - Region: `us-central1` unless the user chooses another region.
 - Runtime service account: `chess-mcp-runtime`
 - CPU: 2

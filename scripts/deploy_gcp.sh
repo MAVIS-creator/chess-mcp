@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-victor-stockfish-mcp}"
+SERVICE="${SERVICE:-chatgpt-stockfish}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-chess-mcp-runtime}"
 
 if [[ -z "$PROJECT_ID" ]]; then

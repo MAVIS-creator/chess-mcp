@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 env:
-  SERVICE: victor-stockfish-mcp
+  SERVICE: chatgpt-stockfish
   REGION: us-central1
   GCP_PROJECT_ID: joint-inspection-510310
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/567370443508/locations/global/workloadIdentityPools/github/providers/github-provider

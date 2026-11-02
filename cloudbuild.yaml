@@ -1,5 +1,5 @@
 substitutions:
-  _SERVICE: victor-stockfish-mcp
+  _SERVICE: chatgpt-stockfish
   _REGION: us-central1
 
 steps:
