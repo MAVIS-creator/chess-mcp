@@ -24,7 +24,7 @@ gcloud run deploy "$SERVICE" \
   --memory 2Gi \
   --concurrency 1 \
   --timeout 60 \
-  --min 1 \
+  --min 0 \
   --max 3 \
   --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000"
 
