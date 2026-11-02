@@ -8,10 +8,13 @@ steps:
     args:
       - -ceu
       - |
+        PROJECT_ID="${PROJECT_ID}"
+        RUNTIME_SA="chess-mcp-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
         gcloud run deploy "${_SERVICE}" \
           --source . \
           --region "${_REGION}" \
           --allow-unauthenticated \
+          --service-account "$RUNTIME_SA" \
           --cpu 2 \
           --cpu-boost \
           --memory 2Gi \
@@ -19,7 +22,7 @@ steps:
           --timeout 30 \
           --min 0 \
           --max 3 \
-          --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000"
+          --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000,HISTORY_BACKEND=firestore,GCP_PROJECT_ID=${PROJECT_ID},CONTEXT_NETWORK_TIMEOUT_MS=1200"
 
 options:
   logging: CLOUD_LOGGING_ONLY
