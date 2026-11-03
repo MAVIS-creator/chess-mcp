@@ -6,6 +6,8 @@ import chess
 
 Orientation = Literal["white_bottom", "black_bottom", "unknown"]
 MIN_VISUAL_CONFIDENCE = 0.90
+MAX_AMBIGUITY_NOTES = 12
+MAX_AMBIGUITY_NOTE_CHARS = 160
 
 
 def _validated_board(fen: str) -> chess.Board:
@@ -17,6 +19,29 @@ def _validated_board(fen: str) -> chess.Board:
     if not board.is_valid():
         raise ValueError("Reconstructed FEN describes an invalid chess position.")
     return board
+
+
+def _validated_ambiguity_notes(ambiguity_notes: list[str] | None) -> list[str]:
+    raw_notes = ambiguity_notes or []
+    if len(raw_notes) > MAX_AMBIGUITY_NOTES:
+        raise ValueError(
+            f"ambiguity_notes may contain at most {MAX_AMBIGUITY_NOTES} entries."
+        )
+
+    notes: list[str] = []
+    for note in raw_notes:
+        if not isinstance(note, str):
+            raise ValueError("Each ambiguity note must be a string.")
+        normalized = note.strip()
+        if not normalized:
+            continue
+        if len(normalized) > MAX_AMBIGUITY_NOTE_CHARS:
+            raise ValueError(
+                "Each ambiguity note must be at most "
+                f"{MAX_AMBIGUITY_NOTE_CHARS} characters."
+            )
+        notes.append(normalized)
+    return notes
 
 
 def validate_visual_reconstruction(
@@ -36,7 +61,7 @@ def validate_visual_reconstruction(
         raise ValueError("recognition_confidence must be between 0.0 and 1.0.")
 
     board = _validated_board(fen)
-    notes = [note.strip() for note in (ambiguity_notes or []) if note and note.strip()]
+    notes = _validated_ambiguity_notes(ambiguity_notes)
     blockers: list[str] = []
 
     if recognition_confidence < MIN_VISUAL_CONFIDENCE:
@@ -47,7 +72,7 @@ def validate_visual_reconstruction(
     if not side_to_move_confirmed:
         blockers.append("side to move is not confirmed")
     if notes:
-        blockers.append("one or more board squares/pieces remain ambiguous")
+        blockers.append("one or more board squares/pieces or position-state details remain ambiguous")
 
     return {
         "analysis_ready": not blockers,
@@ -61,8 +86,18 @@ def validate_visual_reconstruction(
     }
 
 
+def _same_transition_state(trial: chess.Board, after: chess.Board) -> bool:
+    """Compare state a visible move can affect while intentionally ignoring move counters."""
+    return (
+        trial.board_fen() == after.board_fen()
+        and trial.turn == after.turn
+        and trial.castling_rights == after.castling_rights
+        and trial.ep_square == after.ep_square
+    )
+
+
 def compare_visual_fens(before_fen: str, after_fen: str) -> dict:
-    """Compare two reconstructed positions and infer a legal move when possible."""
+    """Compare two validated reconstructed positions and infer a legal move when possible."""
     before = _validated_board(before_fen)
     after = _validated_board(after_fen)
 
@@ -86,7 +121,7 @@ def compare_visual_fens(before_fen: str, after_fen: str) -> dict:
         trial = before.copy(stack=False)
         san = before.san(move)
         trial.push(move)
-        if trial.board_fen() == after.board_fen() and trial.turn == after.turn:
+        if _same_transition_state(trial, after):
             legal_matches.append({"san": san, "uci": move.uci()})
 
     inferred_move = legal_matches[0] if len(legal_matches) == 1 else None
