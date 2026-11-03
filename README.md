@@ -160,7 +160,8 @@ gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 gcloud services enable secretmanager.googleapis.com
 gcloud secrets create chatgpt-stockfish-mcp-token --replication-policy=automatic
-openssl rand -hex 32 | gcloud secrets versions add chatgpt-stockfish-mcp-token --data-file=-
+openssl rand -hex 32 | tr -d '\n' | \
+  gcloud secrets versions add chatgpt-stockfish-mcp-token --data-file=-
 PROJECT_ID=YOUR_PROJECT_ID ./scripts/deploy_gcp.sh
 ```
 
