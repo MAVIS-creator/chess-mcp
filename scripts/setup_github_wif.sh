@@ -62,6 +62,12 @@ gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
   --role="roles/iam.serviceAccountUser" \
   --quiet >/dev/null
 
+# Let source deployments start builds as the project's default Cloud Build identity.
+gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" \
+  --member="serviceAccount:${DEPLOYER_SA}" \
+  --role="roles/iam.serviceAccountUser" \
+  --quiet >/dev/null
+
 # Let the source-build service account build the container image.
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${COMPUTE_SA}" \
