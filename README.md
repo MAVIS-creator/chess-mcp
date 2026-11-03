@@ -36,6 +36,8 @@ Independent context lookups start in parallel while Stockfish searches. Exact Sy
 
 - `full_analysis(...)` — preferred tool; runs the complete parallel chess-brain pipeline.
 - `validate_position(fen)` — validates a FEN and returns legal moves.
+- `analyze_visual_position(...)` — validates a board position reconstructed from an uploaded image, refuses uncertain reconstructions, then runs the full chess-brain analysis.
+- `compare_visual_positions(...)` — safely compares two validated image reconstructions and infers the played legal move only when the transition is unique and exact.
 - `adaptive_analysis(...)` — Stockfish-only analysis with selective deepening.
 - `analyze_position(...)` — fixed-budget Stockfish analysis.
 - `opening_context(fen)` — instant local opening recognition plus optional authenticated Lichess master-game data.
@@ -46,6 +48,22 @@ Independent context lookups start in parallel while Stockfish searches. Exact Sy
 - `analyze_move(...)` — audits a move against Stockfish's best.
 - `tactical_scan(...)` — MultiPV tactical scan and forcing signals.
 - `engine_status()` — engine, cache, context, and safety configuration.
+
+### Board-image workflow and safety
+
+The MCP does not guess pieces directly from image bytes. The host model's vision capability first reconstructs a full FEN from the board screenshot/photo, then passes that reconstruction to `analyze_visual_position` or `compare_visual_positions`.
+
+For a visual reconstruction to be accepted:
+
+- recognition confidence must be at least `0.90`;
+- the side to move must be confirmed;
+- any uncertain square, piece, board orientation issue, castling-right uncertainty, or en-passant uncertainty must be listed in `ambiguity_notes`;
+- any non-empty ambiguity list blocks engine analysis instead of silently guessing;
+- ambiguity notes are bounded to 12 entries of at most 160 characters each.
+
+For before/after screenshots, **both** reconstructed positions must pass those checks before move inference is attempted. Transition matching verifies piece placement, side to move, castling rights, and en-passant state. Halfmove/fullmove counters are intentionally ignored because a static board image cannot establish them reliably.
+
+This keeps image interpretation advisory: once a position is accepted, Stockfish remains authoritative, and exact Syzygy results remain authoritative in supported endgames.
 
 MCP endpoint: `/mcp`
 
