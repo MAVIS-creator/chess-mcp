@@ -8,6 +8,7 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+AFTER_E4_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
 TABLEBASE_FEN = "8/4K2k/5Q1P/6P1/8/8/q7/8 w - - 99 148"
 
 
@@ -30,6 +31,8 @@ async def main() -> None:
             "engine_status",
             "validate_position",
             "full_analysis",
+            "analyze_visual_position",
+            "compare_visual_positions",
             "adaptive_analysis",
             "opening_context",
             "tablebase_lookup",
@@ -55,6 +58,27 @@ async def main() -> None:
         )
         print("\nFull analysis result:")
         print(result)
+
+        visual = await client.call_tool(
+            "analyze_visual_position",
+            {
+                "fen": STARTING_FEN,
+                "recognition_confidence": 0.99,
+                "side_to_move_confirmed": True,
+                "orientation": "white_bottom",
+                "profile": "quick",
+                "max_total_ms": 6000,
+            },
+        )
+        print("\nVisual-position analysis result:")
+        print(visual)
+
+        visual_diff = await client.call_tool(
+            "compare_visual_positions",
+            {"before_fen": STARTING_FEN, "after_fen": AFTER_E4_FEN},
+        )
+        print("\nVisual-position diff result:")
+        print(visual_diff)
 
         tablebase = await client.call_tool("tablebase_lookup", {"fen": TABLEBASE_FEN})
         print("\nTablebase result:")
