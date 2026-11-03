@@ -44,6 +44,11 @@ def _validated_ambiguity_notes(ambiguity_notes: list[str] | None) -> list[str]:
     return notes
 
 
+def _full_fen(board: chess.Board) -> str:
+    """Preserve the exact FEN en-passant square instead of normalizing it away."""
+    return board.fen(en_passant="fen")
+
+
 def validate_visual_reconstruction(
     fen: str,
     *,
@@ -76,7 +81,7 @@ def validate_visual_reconstruction(
 
     return {
         "analysis_ready": not blockers,
-        "normalized_fen": board.fen(),
+        "normalized_fen": _full_fen(board),
         "turn": "white" if board.turn == chess.WHITE else "black",
         "orientation": orientation,
         "recognition_confidence": recognition_confidence,
@@ -126,8 +131,8 @@ def compare_visual_fens(before_fen: str, after_fen: str) -> dict:
 
     inferred_move = legal_matches[0] if len(legal_matches) == 1 else None
     return {
-        "before_fen": before.fen(),
-        "after_fen": after.fen(),
+        "before_fen": _full_fen(before),
+        "after_fen": _full_fen(after),
         "changed_squares": changed_squares,
         "candidate_legal_moves": legal_matches,
         "inferred_move": inferred_move,
