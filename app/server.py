@@ -14,6 +14,7 @@ from app.auth import EnvironmentTokenVerifier
 from app.context import context_service
 from app.engine import AnalysisProfile, service
 from app.orchestrator import adaptive_engine_analysis, full_chess_analysis
+from app.visual import Orientation, compare_visual_fens, validate_visual_reconstruction
 
 mcp = FastMCP(
     "ChatGPT Stockfish",
@@ -25,7 +26,13 @@ mcp = FastMCP(
         "search, compare_moves for named candidates, and analyze_move to audit a move. Exact "
         "Syzygy results outrank heuristic engine evaluations. Player history may personalize the "
         "explanation but must never override objective calculation. Scores are reported from the "
-        "side-to-move perspective in the supplied FEN."
+        "side-to-move perspective in the supplied FEN. When the user supplies a chess-board image, "
+        "use the host's vision capability to reconstruct a full FEN, determine board orientation, "
+        "and confirm whose turn it is, then call analyze_visual_position. Never guess through an "
+        "unclear square or uncertain side to move: lower recognition_confidence and describe every "
+        "uncertainty in ambiguity_notes so the tool can stop before engine analysis. For before/after "
+        "board images, reconstruct both positions and call compare_visual_positions to identify the "
+        "changed squares or infer the unique legal move before giving conclusions."
     ),
 )
 
@@ -84,6 +91,62 @@ def full_analysis(
         close_gap_cp=close_gap_cp,
         max_total_ms=max_total_ms,
     )
+
+
+@mcp.tool
+def analyze_visual_position(
+    fen: str,
+    recognition_confidence: float,
+    side_to_move_confirmed: bool,
+    orientation: Orientation = "unknown",
+    ambiguity_notes: list[str] | None = None,
+    profile: AnalysisProfile = "normal",
+    player_id: str | None = None,
+    close_gap_cp: int = 35,
+    max_total_ms: int = 25000,
+) -> dict:
+    """Validate and analyze a chess position reconstructed from an uploaded board image.
+
+    The ChatGPT/host vision model should inspect the image and supply the reconstructed FEN.
+    Set recognition_confidence conservatively, confirm whose move it is, and list any unclear
+    squares or pieces in ambiguity_notes. The tool refuses engine analysis when the visual
+    reconstruction is not reliable enough, preventing a confident answer from a wrong board.
+    """
+    visual = validate_visual_reconstruction(
+        fen,
+        recognition_confidence=recognition_confidence,
+        side_to_move_confirmed=side_to_move_confirmed,
+        orientation=orientation,
+        ambiguity_notes=ambiguity_notes,
+    )
+    if not visual["analysis_ready"]:
+        return {
+            "analysis_ready": False,
+            "visual_validation": visual,
+            "next_action": (
+                "Re-check the uploaded board image or ask the user to clarify the ambiguous "
+                "square(s) and side to move. Do not guess a best move yet."
+            ),
+        }
+
+    analysis = full_chess_analysis(
+        visual["normalized_fen"],
+        profile=profile,
+        player_id=player_id,
+        close_gap_cp=close_gap_cp,
+        max_total_ms=max_total_ms,
+    )
+    return {
+        "analysis_ready": True,
+        "visual_validation": visual,
+        "analysis": analysis,
+    }
+
+
+@mcp.tool
+def compare_visual_positions(before_fen: str, after_fen: str) -> dict:
+    """Compare two image-reconstructed boards and infer the played legal move when unique."""
+    return compare_visual_fens(before_fen, after_fen)
 
 
 @mcp.tool
@@ -256,4 +319,5 @@ if __name__ == "__main__":
         port=port,
         path="/mcp",
         stateless_http=True,
+        json_response=True,
     )
