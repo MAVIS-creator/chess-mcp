@@ -51,6 +51,10 @@ MCP endpoint: `/mcp`
 
 Health endpoint: `/health`
 
+The MCP endpoint requires an `Authorization: Bearer ...` token. The token is stored in Google
+Secret Manager and injected into Cloud Run at runtime; it is never committed or baked into the
+container image.
+
 ## Latency target
 
 **30 seconds is the infrastructure ceiling, not the normal target.**
@@ -122,7 +126,9 @@ The default public deployment sets history up for **reads**, while writes are ga
 HISTORY_WRITES_ENABLED=false
 ```
 
-`record_player_event` therefore returns a safe "writes disabled" result by default. Do **not** enable anonymous writes on the public unauthenticated MCP endpoint. After compatible MCP authentication and rate limiting are configured, set `HISTORY_WRITES_ENABLED=true` to activate persistent learning events.
+`record_player_event` therefore returns a safe "writes disabled" result by default. Authentication
+does not automatically enable history writes; keep them disabled unless authenticated user-level
+authorization and rate limiting are also configured.
 
 This gives us the intended personalization model without allowing strangers to spam Firestore costs.
 
@@ -152,6 +158,9 @@ History writes         disabled until authenticated
 ```bash
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
+gcloud services enable secretmanager.googleapis.com
+gcloud secrets create chatgpt-stockfish-mcp-token --replication-policy=automatic
+openssl rand -hex 32 | gcloud secrets versions add chatgpt-stockfish-mcp-token --data-file=-
 PROJECT_ID=YOUR_PROJECT_ID ./scripts/deploy_gcp.sh
 ```
 
@@ -169,6 +178,7 @@ Verify:
 
 ```bash
 curl https://YOUR-SERVICE.run.app/health
+export MCP_AUTH_TOKEN="$(gcloud secrets versions access latest --secret=chatgpt-stockfish-mcp-token)"
 python scripts/test_remote.py https://YOUR-SERVICE.run.app/mcp
 ```
 
@@ -195,7 +205,10 @@ The workflow expects:
 Codex:
 
 ```bash
-codex mcp add victorStockfish --url https://YOUR-SERVICE.run.app/mcp
+export CHATGPT_STOCKFISH_TOKEN="$(gcloud secrets versions access latest --secret=chatgpt-stockfish-mcp-token)"
+codex mcp add victorStockfish \
+  --url https://YOUR-SERVICE.run.app/mcp \
+  --bearer-token-env-var CHATGPT_STOCKFISH_TOKEN
 codex mcp list
 ```
 
@@ -215,6 +228,10 @@ For a real local engine test, set `STOCKFISH_PATH` to a Stockfish binary or buil
 
 ## Security and fair-play notes
 
-The starter Cloud Run analysis endpoint is public so remote MCP clients can reach it. CPU/search limits, max instances, caching, scale-to-zero, and disabled history writes reduce risk, but a public compute endpoint can still be abused. Add compatible MCP authentication/rate limiting before broader use or before enabling persistent writes.
+Cloud Run remains publicly reachable so remote MCP clients can connect, but the compute-capable MCP
+endpoint rejects requests without the configured bearer token. CPU/search limits, max instances,
+caching, scale-to-zero, and disabled history writes provide additional cost protection. Rotate the
+Secret Manager secret if the token is exposed, and add user-level authorization/rate limiting before
+enabling persistent writes.
 
 Do not use engine assistance during live games on platforms whose fair-play rules forbid it. This project is intended for analysis, study, training, and allowed use cases.

@@ -7,6 +7,7 @@ POOL_ID="${POOL_ID:-github}"
 PROVIDER_ID="${PROVIDER_ID:-github-provider}"
 DEPLOYER_SA_NAME="${DEPLOYER_SA_NAME:-github-cloud-run-deployer}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-chess-mcp-runtime}"
+MCP_AUTH_SECRET="${MCP_AUTH_SECRET:-chatgpt-stockfish-mcp-token}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
@@ -28,6 +29,7 @@ gcloud services enable \
   firestore.googleapis.com \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
+  secretmanager.googleapis.com \
   sts.googleapis.com
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
@@ -55,6 +57,17 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" \
   --role="roles/datastore.user" \
   --quiet >/dev/null
+
+if gcloud secrets describe "$MCP_AUTH_SECRET" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding "$MCP_AUTH_SECRET" \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --quiet >/dev/null
+  gcloud secrets add-iam-policy-binding "$MCP_AUTH_SECRET" \
+    --member="serviceAccount:${DEPLOYER_SA}" \
+    --role="roles/secretmanager.viewer" \
+    --quiet >/dev/null
+fi
 
 # Let GitHub deploy Cloud Run revisions under the dedicated runtime identity.
 gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \

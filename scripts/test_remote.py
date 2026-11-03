@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 
 from fastmcp import Client
-
+from fastmcp.client.auth import BearerAuth
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 TABLEBASE_FEN = "8/4K2k/5Q1P/6P1/8/8/q7/8 w - - 99 148"
@@ -14,8 +15,11 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Full MCP URL, e.g. https://service.run.app/mcp")
     args = parser.parse_args()
+    token = os.getenv("MCP_AUTH_TOKEN")
+    if not token:
+        parser.error("Set MCP_AUTH_TOKEN to the deployed bearer token.")
 
-    async with Client(args.url) as client:
+    async with Client(args.url, auth=BearerAuth(token)) as client:
         tools = await client.list_tools()
         names = {tool.name for tool in tools}
         print("Tools:")

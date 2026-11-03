@@ -5,6 +5,7 @@ PROJECT_ID="${PROJECT_ID:-}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-chatgpt-stockfish}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-chess-mcp-runtime}"
+MCP_AUTH_SECRET="${MCP_AUTH_SECRET:-chatgpt-stockfish-mcp-token}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
@@ -20,7 +21,8 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   firestore.googleapis.com \
-  iam.googleapis.com
+  iam.googleapis.com \
+  secretmanager.googleapis.com
 
 RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 if ! gcloud iam service-accounts describe "$RUNTIME_SA" >/dev/null 2>&1; then
@@ -31,6 +33,15 @@ fi
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" \
   --role="roles/datastore.user" \
+  --quiet >/dev/null
+
+if ! gcloud secrets describe "$MCP_AUTH_SECRET" >/dev/null 2>&1; then
+  echo "Create Secret Manager secret '$MCP_AUTH_SECRET' before deploying." >&2
+  exit 1
+fi
+gcloud secrets add-iam-policy-binding "$MCP_AUTH_SECRET" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/secretmanager.secretAccessor" \
   --quiet >/dev/null
 
 # Create the default Firestore Native database only when the project does not already have it.
@@ -55,6 +66,7 @@ gcloud run deploy "$SERVICE" \
   --timeout 30 \
   --min 0 \
   --max 3 \
+  --set-secrets "MCP_AUTH_TOKEN=${MCP_AUTH_SECRET}:latest" \
   --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000,HISTORY_BACKEND=firestore,HISTORY_WRITES_ENABLED=false,GCP_PROJECT_ID=${PROJECT_ID},CONTEXT_NETWORK_TIMEOUT_MS=1200"
 
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

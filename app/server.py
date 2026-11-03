@@ -10,12 +10,14 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from app.auth import EnvironmentTokenVerifier
 from app.context import context_service
 from app.engine import AnalysisProfile, service
 from app.orchestrator import adaptive_engine_analysis, full_chess_analysis
 
 mcp = FastMCP(
     "ChatGPT Stockfish",
+    auth=EnvironmentTokenVerifier(),
     instructions=(
         "Prefer full_analysis for normal chess questions: it combines Stockfish, opening/game "
         "context, Syzygy and optional player history under a strict latency budget. Use "
