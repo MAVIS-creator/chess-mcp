@@ -66,7 +66,7 @@ async def cedar_browser_analyze(request: Request) -> JSONResponse:
 
     try:
         payload = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     if not isinstance(payload, dict):
@@ -81,7 +81,7 @@ async def cedar_browser_analyze(request: Request) -> JSONResponse:
         if value is None:
             return None
         if isinstance(value, bool):
-            raise ValueError(f"{name} must be an integer")
+            raise TypeError(f"{name} must be an integer")
         return int(value)
 
     try:
