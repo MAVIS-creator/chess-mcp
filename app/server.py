@@ -53,6 +53,52 @@ async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "detail": str(exc)}, status_code=503)
 
 
+@mcp.custom_route("/api/analyze", methods=["POST"])
+async def cedar_browser_analyze(request: Request) -> JSONResponse:
+    """Authenticated fixed-budget Stockfish route for the Cedar Chess web client."""
+    authorization = request.headers.get("authorization", "")
+    if not authorization.startswith("Bearer "):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    token = authorization[7:].strip()
+    if not token or await EnvironmentTokenVerifier().verify_token(token) is None:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    fen = payload.get("fen")
+    if not isinstance(fen, str) or not fen.strip() or len(fen) > 120:
+        return JSONResponse({"error": "A valid FEN is required"}, status_code=400)
+
+    def optional_int(name: str, default: int | None = None) -> int | None:
+        value = payload.get(name, default)
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise TypeError(f"{name} must be an integer")
+        return int(value)
+
+    try:
+        analysis = service.analyze(
+            fen.strip(),
+            time_ms=optional_int("time_ms", 1200) or 1200,
+            multipv=optional_int("multipv", 3) or 3,
+            depth=optional_int("depth"),
+            nodes=optional_int("nodes"),
+        )
+        return JSONResponse({**analysis, "engine_source": "gcp-stockfish-19"})
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except (OSError, chess.engine.EngineError) as exc:
+        return JSONResponse({"error": "Engine unavailable", "detail": str(exc)}, status_code=503)
+
+
 @mcp.tool
 def validate_position(fen: str) -> dict:
     """Validate a FEN and return basic position facts plus legal moves."""
