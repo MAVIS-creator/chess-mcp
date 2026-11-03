@@ -1,4 +1,7 @@
-from app.visual import compare_visual_fens, validate_visual_reconstruction
+from app.visual import (
+    compare_visual_fens,
+    validate_visual_reconstruction,
+)
 
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
