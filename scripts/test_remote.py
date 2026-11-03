@@ -75,7 +75,16 @@ async def main() -> None:
 
         visual_diff = await client.call_tool(
             "compare_visual_positions",
-            {"before_fen": STARTING_FEN, "after_fen": AFTER_E4_FEN},
+            {
+                "before_fen": STARTING_FEN,
+                "after_fen": AFTER_E4_FEN,
+                "before_recognition_confidence": 0.99,
+                "after_recognition_confidence": 0.99,
+                "before_side_to_move_confirmed": True,
+                "after_side_to_move_confirmed": True,
+                "before_orientation": "white_bottom",
+                "after_orientation": "white_bottom",
+            },
         )
         print("\nVisual-position diff result:")
         print(visual_diff)
