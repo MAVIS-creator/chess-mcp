@@ -31,7 +31,7 @@ def _validated_ambiguity_notes(ambiguity_notes: list[str] | None) -> list[str]:
     notes: list[str] = []
     for note in raw_notes:
         if not isinstance(note, str):
-            raise ValueError("Each ambiguity note must be a string.")
+            raise TypeError("Each ambiguity note must be a string.")
         normalized = note.strip()
         if not normalized:
             continue
