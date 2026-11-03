@@ -1,5 +1,5 @@
 substitutions:
-  _SERVICE: victor-stockfish-mcp
+  _SERVICE: chatgpt-stockfish
   _REGION: us-central1
 
 steps:
@@ -8,17 +8,22 @@ steps:
     args:
       - -ceu
       - |
+        PROJECT_ID="${PROJECT_ID}"
+        RUNTIME_SA="chess-mcp-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
         gcloud run deploy "${_SERVICE}" \
           --source . \
           --region "${_REGION}" \
           --allow-unauthenticated \
+          --service-account "$RUNTIME_SA" \
           --cpu 2 \
+          --cpu-boost \
           --memory 2Gi \
           --concurrency 1 \
-          --timeout 60 \
-          --min 1 \
+          --timeout 30 \
+          --min 0 \
           --max 3 \
-          --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000"
+          --set-secrets "MCP_AUTH_TOKEN=chatgpt-stockfish-mcp-token:latest" \
+          --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000,HISTORY_BACKEND=firestore,HISTORY_WRITES_ENABLED=false,GCP_PROJECT_ID=${PROJECT_ID},CONTEXT_NETWORK_TIMEOUT_MS=1200"
 
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -25,9 +25,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN useradd --create-home --uid 10001 appuser
 COPY --from=stockfish-builder /src/Stockfish/src/stockfish /usr/local/bin/stockfish
 WORKDIR /app
+COPY --from=stockfish-builder /src/Stockfish/src/*.nnue ./
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && chmod -R a+rX /app
 USER appuser
 EXPOSE 8080
 CMD ["python", "-m", "app.server"]

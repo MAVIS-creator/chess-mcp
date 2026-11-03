@@ -3,13 +3,14 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "victor-stockfish-mcp"
-version = "0.1.0"
-description = "Remote MCP server exposing Stockfish chess analysis for ChatGPT, Codex, and other MCP clients."
+name = "chatgpt-stockfish-mcp"
+version = "0.3.0"
+description = "Low-latency remote chess MCP combining Stockfish, openings, Syzygy, and player history."
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp==4.1.5",
   "python-chess==1.999",
+  "google-cloud-firestore>=2.34,<3",
 ]
 
 [project.optional-dependencies]

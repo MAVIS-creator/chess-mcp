@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import os
 import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import chess
 import chess.engine
@@ -13,6 +15,28 @@ MAX_TIME_MS = int(os.getenv("MAX_ANALYSIS_MS", "15000"))
 MAX_MULTIPV = int(os.getenv("MAX_MULTIPV", "8"))
 MAX_DEPTH = int(os.getenv("MAX_DEPTH", "40"))
 MAX_NODES = int(os.getenv("MAX_NODES", "50000000"))
+ENGINE_CACHE_TTL_SECONDS = max(0, int(os.getenv("ENGINE_CACHE_TTL_SECONDS", "180")))
+ENGINE_CACHE_MAX_ENTRIES = max(0, int(os.getenv("ENGINE_CACHE_MAX_ENTRIES", "256")))
+
+AnalysisProfile = Literal["quick", "normal", "deep"]
+
+ANALYSIS_PROFILES: dict[AnalysisProfile, dict[str, int]] = {
+    "quick": {
+        "initial_time_ms": 500,
+        "confirm_time_ms": 1500,
+        "multipv": 2,
+    },
+    "normal": {
+        "initial_time_ms": 1200,
+        "confirm_time_ms": 3500,
+        "multipv": 4,
+    },
+    "deep": {
+        "initial_time_ms": 3000,
+        "confirm_time_ms": 8000,
+        "multipv": 5,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -23,16 +47,13 @@ class EngineSettings:
 
 
 class StockfishService:
-    """Single Stockfish process guarded by a lock.
-
-    Cloud Run is deployed with concurrency=1 by default in this project, but the
-    lock still protects local/dev usage and future configuration changes.
-    """
+    """Single Stockfish process guarded by a lock with a small warm-instance cache."""
 
     def __init__(self, settings: EngineSettings | None = None) -> None:
         self.settings = settings or EngineSettings()
         self._engine: chess.engine.SimpleEngine | None = None
         self._lock = threading.RLock()
+        self._analysis_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def _ensure_engine(self) -> chess.engine.SimpleEngine:
         if self._engine is None:
@@ -57,6 +78,8 @@ class StockfishService:
             if self._engine is not None:
                 try:
                     self._engine.quit()
+                except (chess.engine.EngineError, OSError):
+                    pass
                 finally:
                     self._engine = None
 
@@ -83,6 +106,16 @@ class StockfishService:
             return board.parse_san(text)
         except ValueError as exc:
             raise ValueError(f"Illegal or unrecognized move '{move_text}'. Use SAN or UCI.") from exc
+
+    @staticmethod
+    def profile_settings(profile: AnalysisProfile) -> dict[str, int]:
+        if profile not in ANALYSIS_PROFILES:
+            raise ValueError(f"Unknown analysis profile: {profile}")
+        settings = dict(ANALYSIS_PROFILES[profile])
+        settings["initial_time_ms"] = min(settings["initial_time_ms"], MAX_TIME_MS)
+        settings["confirm_time_ms"] = min(settings["confirm_time_ms"], MAX_TIME_MS)
+        settings["multipv"] = min(settings["multipv"], MAX_MULTIPV)
+        return settings
 
     @staticmethod
     def _normalize_limits(
@@ -153,6 +186,69 @@ class StockfishService:
             "pv": self._pv_payload(board, pv),
         }
 
+    def _run_analysis(
+        self,
+        board: chess.Board,
+        limit: chess.engine.Limit,
+        *,
+        multipv: int,
+        root_moves: list[chess.Move] | None,
+    ) -> list[dict[str, Any]]:
+        """Run one engine search and recover once if the Stockfish process died."""
+        for attempt in range(2):
+            try:
+                engine = self._ensure_engine()
+                result = engine.analyse(
+                    board,
+                    limit,
+                    multipv=multipv,
+                    root_moves=root_moves,
+                )
+                return result if isinstance(result, list) else [result]
+            except (chess.engine.EngineError, OSError):
+                self.close()
+                if attempt == 1:
+                    raise
+        raise RuntimeError("Stockfish analysis failed unexpectedly.")
+
+    @staticmethod
+    def _cache_key(
+        board: chess.Board,
+        *,
+        time_ms: int,
+        multipv: int,
+        depth: int | None,
+        nodes: int | None,
+        root_moves: list[str] | None,
+    ) -> str:
+        roots = ",".join(root_moves or [])
+        return f"{board.fen()}|t={time_ms}|pv={multipv}|d={depth}|n={nodes}|r={roots}"
+
+    def _cache_get(self, key: str) -> dict[str, Any] | None:
+        if ENGINE_CACHE_TTL_SECONDS <= 0 or ENGINE_CACHE_MAX_ENTRIES <= 0:
+            return None
+        item = self._analysis_cache.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if expires_at <= time.monotonic():
+            self._analysis_cache.pop(key, None)
+            return None
+        result = copy.deepcopy(value)
+        result["cached"] = True
+        return result
+
+    def _cache_put(self, key: str, value: dict[str, Any]) -> None:
+        if ENGINE_CACHE_TTL_SECONDS <= 0 or ENGINE_CACHE_MAX_ENTRIES <= 0:
+            return
+        if len(self._analysis_cache) >= ENGINE_CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(self._analysis_cache), None)
+            if oldest_key is not None:
+                self._analysis_cache.pop(oldest_key, None)
+        stored = copy.deepcopy(value)
+        stored["cached"] = False
+        self._analysis_cache[key] = (time.monotonic() + ENGINE_CACHE_TTL_SECONDS, stored)
+
     def analyze(
         self,
         fen: str,
@@ -164,33 +260,56 @@ class StockfishService:
         root_moves: list[str] | None = None,
     ) -> dict[str, Any]:
         board = self.board_from_fen(fen)
+        safe_time_ms = max(50, min(int(time_ms), MAX_TIME_MS))
         safe_multipv = max(1, min(int(multipv), MAX_MULTIPV))
-        limit = self._normalize_limits(time_ms=time_ms, depth=depth, nodes=nodes)
+        safe_depth = None if depth is None else max(1, min(int(depth), MAX_DEPTH))
+        safe_nodes = None if nodes is None else max(1, min(int(nodes), MAX_NODES))
 
         parsed_root_moves: list[chess.Move] | None = None
+        normalized_root_moves: list[str] | None = None
         if root_moves:
             parsed_root_moves = [self.parse_move(board, move) for move in root_moves]
+            normalized_root_moves = [move.uci() for move in parsed_root_moves]
+            safe_multipv = min(safe_multipv, len(parsed_root_moves))
 
+        cache_key = self._cache_key(
+            board,
+            time_ms=safe_time_ms,
+            multipv=safe_multipv,
+            depth=safe_depth,
+            nodes=safe_nodes,
+            root_moves=normalized_root_moves,
+        )
         with self._lock:
-            engine = self._ensure_engine()
-            result = engine.analyse(
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
+
+            limit = self._normalize_limits(
+                time_ms=safe_time_ms,
+                depth=safe_depth,
+                nodes=safe_nodes,
+            )
+            infos = self._run_analysis(
                 board,
                 limit,
                 multipv=safe_multipv,
                 root_moves=parsed_root_moves,
             )
 
-        infos = result if isinstance(result, list) else [result]
-        lines = [self._info_payload(board, info) for info in infos]
-        return {
-            "fen": board.fen(),
-            "turn": "white" if board.turn == chess.WHITE else "black",
-            "in_check": board.is_check(),
-            "fullmove_number": board.fullmove_number,
-            "lines": lines,
-            "best_move": lines[0]["move"] if lines else None,
-            "best_move_uci": lines[0]["move_uci"] if lines else None,
-        }
+            lines = [self._info_payload(board, info) for info in infos]
+            result = {
+                "fen": board.fen(),
+                "turn": "white" if board.turn == chess.WHITE else "black",
+                "in_check": board.is_check(),
+                "fullmove_number": board.fullmove_number,
+                "lines": lines,
+                "best_move": lines[0]["move"] if lines else None,
+                "best_move_uci": lines[0]["move_uci"] if lines else None,
+                "cached": False,
+            }
+            self._cache_put(cache_key, result)
+            return result
 
     def compare_moves(self, fen: str, moves: list[str], *, time_ms: int = 2000) -> dict[str, Any]:
         board = self.board_from_fen(fen)
@@ -199,29 +318,39 @@ class StockfishService:
         if len(moves) > MAX_MULTIPV:
             raise ValueError(f"At most {MAX_MULTIPV} candidate moves can be compared at once.")
 
-        candidates = []
+        requested_by_uci: dict[str, str] = {}
+        root_moves: list[str] = []
         for move_text in moves:
             move = self.parse_move(board, move_text)
-            san = board.san(move)
-            analysis = self.analyze(
-                fen,
-                time_ms=time_ms,
-                multipv=1,
-                root_moves=[move.uci()],
+            uci = move.uci()
+            if uci in requested_by_uci:
+                continue
+            requested_by_uci[uci] = board.san(move)
+            root_moves.append(uci)
+
+        analysis = self.analyze(
+            fen,
+            time_ms=time_ms,
+            multipv=len(root_moves),
+            root_moves=root_moves,
+        )
+
+        ranking = []
+        for line in analysis["lines"]:
+            move_uci = line.get("move_uci")
+            ranking.append(
+                {
+                    "requested_move": requested_by_uci.get(str(move_uci)),
+                    "requested_move_uci": move_uci,
+                    **line,
+                }
             )
-            line = analysis["lines"][0]
-            candidates.append({"requested_move": san, "requested_move_uci": move.uci(), **line})
 
-        def score_key(item: dict[str, Any]) -> int:
-            score = item.get("score") or {}
-            value = score.get("numeric_for_sorting")
-            return -1000000 if value is None else int(value)
-
-        candidates.sort(key=score_key, reverse=True)
         return {
             "fen": board.fen(),
             "turn": "white" if board.turn == chess.WHITE else "black",
-            "ranking": candidates,
+            "ranking": ranking,
+            "cached": analysis.get("cached", False),
         }
 
     def status(self) -> dict[str, Any]:
@@ -233,6 +362,12 @@ class StockfishService:
                 "path": self.settings.path,
                 "threads": self.settings.threads,
                 "hash_mb": self.settings.hash_mb,
+                "analysis_profiles": ANALYSIS_PROFILES,
+                "cache": {
+                    "ttl_seconds": ENGINE_CACHE_TTL_SECONDS,
+                    "max_entries": ENGINE_CACHE_MAX_ENTRIES,
+                    "entries": len(self._analysis_cache),
+                },
                 "limits": {
                     "max_analysis_ms": MAX_TIME_MS,
                     "max_multipv": MAX_MULTIPV,

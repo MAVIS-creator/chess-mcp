@@ -10,8 +10,11 @@ permissions:
   id-token: write
 
 env:
-  SERVICE: victor-stockfish-mcp
+  SERVICE: chatgpt-stockfish
   REGION: us-central1
+  GCP_PROJECT_ID: joint-inspection-510310
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/567370443508/locations/global/workloadIdentityPools/github/providers/github-provider
+  GCP_SERVICE_ACCOUNT: github-cloud-run-deployer@joint-inspection-510310.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -22,21 +25,26 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v3
 
       - name: Deploy from source
         run: |
+          PROJECT_ID="${GCP_PROJECT_ID}"
+          RUNTIME_SA="chess-mcp-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
           gcloud run deploy "$SERVICE" \
             --source . \
-            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --project "$PROJECT_ID" \
             --region "$REGION" \
+            --service-account "$RUNTIME_SA" \
             --cpu 2 \
+            --cpu-boost \
             --memory 2Gi \
             --concurrency 1 \
-            --timeout 60 \
-            --min 1 \
+            --timeout 30 \
+            --min 0 \
             --max 3 \
-            --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000"
+            --set-secrets "MCP_AUTH_TOKEN=chatgpt-stockfish-mcp-token:latest" \
+            --set-env-vars "STOCKFISH_THREADS=2,STOCKFISH_HASH_MB=512,MAX_ANALYSIS_MS=15000,MAX_MULTIPV=8,MAX_DEPTH=40,MAX_NODES=50000000,HISTORY_BACKEND=firestore,HISTORY_WRITES_ENABLED=false,GCP_PROJECT_ID=${PROJECT_ID},CONTEXT_NETWORK_TIMEOUT_MS=1200"

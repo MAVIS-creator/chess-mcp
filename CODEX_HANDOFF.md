@@ -1,100 +1,124 @@
-# Codex handoff — build, deploy, connect, and push Victor Stockfish MCP
+# Codex handoff — deploy and verify the complete ChatGPT Stockfish MCP
 
-Copy the prompt below into Codex from the root of this repository.
+You are responsible for taking this repository from source to a working remote chess MCP on Google Cloud Run, with the complete implemented pipeline: Stockfish 19 + opening/master-game context + Syzygy + persistent Firestore player history.
 
----
-
-You are responsible for taking this repository from local source to a working remote Stockfish MCP server on Google Cloud Run and then pushing the finished project to GitHub.
-
-Work autonomously as far as permissions allow. Do not invent credentials. If an interactive login/authorization page is required, stop only for that human authorization step, then continue automatically.
+Work autonomously as far as permissions allow. Do not invent credentials. Stop only for required human login/authorization, then continue.
 
 ## 1. Inspect and verify
-1. Read `AGENTS.md`, `README.md`, `pyproject.toml`, `Dockerfile`, `app/server.py`, `app/engine.py`, and the workflows.
-2. Add the official OpenAI developer-docs MCP to Codex if it is not already configured:
-   `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`
-3. Use current official OpenAI/MCP and Google Cloud Run docs to verify any command whose syntax may have changed.
-4. Do not downgrade Stockfish below the pinned stable release unless the build proves incompatible.
+1. Read `AGENTS.md`, `README.md`, `pyproject.toml`, `Dockerfile`, `app/server.py`, `app/engine.py`, `app/context.py`, `app/orchestrator.py`, deployment scripts, and workflows.
+2. Use current official OpenAI/MCP, Google Cloud Run, Firestore, and Lichess API docs when syntax or behavior may have changed.
+3. Do not downgrade Stockfish below the pinned stable release unless the build proves incompatible.
+4. Preserve the 30-second infrastructure ceiling and the normal few-seconds latency goal.
 
 ## 2. Local validation
-1. Ensure Python 3.11+ is available; prefer Python 3.12.
+1. Use Python 3.12 where available.
 2. Create a virtual environment and install `.[dev]`.
 3. Run:
    - `ruff check app tests`
    - `pytest -q`
-4. If Docker is installed, build the image and run it locally on port 8080.
-5. Verify `/health` and use MCP Inspector or `scripts/test_remote.py` against `http://localhost:8080/mcp`.
-6. Fix any code/build issue you encounter and rerun tests.
+4. If Docker is available, build and run the image locally.
+5. Verify `/health`, MCP tool listing, `full_analysis`, `adaptive_analysis`, and `tablebase_lookup` using `scripts/test_remote.py` or MCP Inspector.
+6. Fix any issue encountered and rerun validation.
 
 ## 3. Google Cloud setup
-1. Verify `gcloud` exists. If not, install the official Google Cloud CLI using the supported method for this OS.
-2. Run `gcloud auth login` if no usable user session exists. This may require human browser authorization.
-3. Determine the intended GCP project. If none is configured and there is exactly one obvious project available to the signed-in user, use it. Otherwise ask only for the project ID.
-4. Configure the project and region (`us-central1` by default unless there is a clear reason to use another region).
-5. Enable at least:
-   - Cloud Run API
-   - Cloud Build API
-   - Artifact Registry API
-6. Deploy using `scripts/deploy_gcp.sh` or equivalent current `gcloud run deploy --source .` commands.
-7. Keep these safety/performance defaults unless the user explicitly changes them:
+1. Verify/install `gcloud` using the official method.
+2. Authenticate with `gcloud auth login` when required.
+3. Select the intended project and use `us-central1` unless the user explicitly chooses another region.
+4. Run `scripts/deploy_gcp.sh` as the preferred setup path. It should:
+   - enable Cloud Run, Cloud Build, Artifact Registry, IAM, and Firestore APIs
+   - create/reuse `chess-mcp-runtime@PROJECT_ID.iam.gserviceaccount.com`
+   - grant that runtime identity `roles/datastore.user`
+   - create the default Firestore Native database when one does not exist
+   - deploy the Cloud Run service under the dedicated runtime identity
+5. Preserve these defaults unless explicitly changed:
    - 2 vCPU
+   - startup CPU boost enabled
    - 2 GiB RAM
    - concurrency 1
-   - min instances 1
+   - min instances 0
    - max instances 3
-   - timeout 60s
+   - request timeout 30s
    - Stockfish threads 2
    - Stockfish hash 512 MB
-   - max analysis time 15s
-8. Public unauthenticated invocation is acceptable for this first read-only chess-analysis deployment, but clearly report that this can be abused and create GCP cost. Do not expose any secrets. If the user wants stronger security, implement OAuth/bearer-token protection compatible with the chosen MCP client instead of relying on obscurity.
-9. Capture the deployed service URL and verify:
-   - `GET <URL>/health`
-   - MCP initialize/tool listing at `<URL>/mcp`
-   - a real `analyze_position` call.
+   - max fixed engine call 15s
+   - context provider timeout around 1200ms
+   - Firestore history reads enabled
+   - `HISTORY_WRITES_ENABLED=false` on the public unauthenticated deployment
+6. Treat 30 seconds as a hard ceiling, not a target. `full_analysis` should normally finish much sooner.
+7. Do not put credentials or Lichess tokens in GitHub or the image.
 
-## 4. GitHub repository
-1. Check whether this directory already has a remote.
-2. If it does not, use GitHub CLI (`gh`) if available. Authenticate with `gh auth login` if needed.
-3. Create a repository named `victor-stockfish-mcp` under the user's currently authenticated GitHub account unless a different repo name is already established.
-4. Default visibility: PRIVATE unless the user has already explicitly said public.
-5. Initialize git if needed, commit all safe files, and push `main`.
-6. Never commit `.env`, GCP credential JSON, access tokens, or other secrets.
+## 4. Optional Lichess master-game enrichment
+The MCP always has a fast local opening fallback. Richer master-game opening statistics require an authenticated Lichess Opening Explorer token.
 
-## 5. GitHub Actions → GCP
-Configure secure continuous deployment with Google Workload Identity Federation if account permissions allow it. Prefer the included `scripts/setup_github_wif.sh` after the GitHub repository exists; inspect it first, then run it with `PROJECT_ID` and `GITHUB_REPO=owner/repo`.
+If the user has/provides a Lichess token, store it as a Cloud Run secret or protected environment value named `LICHESS_TOKEN`. Never commit it. If no token is available, leave the remote opening explorer disabled; `full_analysis` must still work using the local fallback.
 
-Required GitHub repository secrets/variables for the included workflow:
+## 5. Verify the live chess brain
+After deployment, capture the Cloud Run URL and verify all of the following:
+1. `GET <URL>/health` returns healthy Stockfish status and shows history enabled.
+2. MCP initialize/tool listing works at `<URL>/mcp`.
+3. `engine_status` returns Stockfish identity, cache configuration, and context status.
+4. `full_analysis` on the starting position returns within its budget and includes:
+   - engine result
+   - opening/game context
+   - tablebase applicability result
+   - player-history section
+5. `tablebase_lookup` on a valid <=7-piece position returns an exact Syzygy result when supported.
+6. On the default public deployment, call `record_player_event` and verify it is safely rejected because history writes are disabled.
+7. Verify `player_history` reads cleanly even when there are no stored events.
+8. Repeating an identical Stockfish request on the same warm instance should show the engine cache being used where applicable.
+
+Do **not** enable `HISTORY_WRITES_ENABLED=true` on a public unauthenticated MCP endpoint just to make the write test pass. Only enable persistent writes after compatible MCP authentication and rate limiting are configured. Once that protection exists, enable writes and then verify a temporary event can be stored and read back.
+
+## 6. GitHub Actions -> GCP
+Run/inspect `scripts/setup_github_wif.sh` with:
+
+```bash
+PROJECT_ID=YOUR_PROJECT_ID GITHUB_REPO=MAVIS-creator/chess-mcp ./scripts/setup_github_wif.sh
+```
+
+It should configure Workload Identity Federation, create/reuse the GitHub deployer and chess runtime identities, grant the runtime Firestore data role, and allow the deployer to act as the runtime service account.
+
+Required GitHub secrets:
 - `GCP_PROJECT_ID`
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_SERVICE_ACCOUNT`
 
-Prefer WIF over creating/downloading a long-lived service-account JSON key. Grant the deployment service account only the roles actually required for source deployment to Cloud Run and Artifact Registry/Cloud Build usage. If organization policy prevents this setup, leave CI enabled and document exactly which remaining permissions/settings the user must add.
+Trigger the deploy workflow once after setup and verify it succeeds.
 
-After configuring WIF, trigger the workflow once and verify it succeeds.
+## 7. Connect clients
+For Codex:
 
-## 6. Connect clients
-After deployment, output the exact MCP URL.
+```bash
+codex mcp add victorStockfish --url https://<service>.run.app/mcp
+codex mcp list
+```
 
-For Codex, run or instruct:
-`codex mcp add victorStockfish --url https://<service>.run.app/mcp`
-then verify with:
-`codex mcp list`
+For ChatGPT, use the same HTTPS MCP URL in an account/workspace that currently supports remote custom MCP connections. Verify current product documentation/account UI rather than assuming availability.
 
-For ChatGPT, explain that the same MCP URL should be added as a custom MCP/plugin connection in a ChatGPT workspace/account that currently supports custom remote MCP connections. Do not claim the feature exists for an account without checking current OpenAI documentation/account UI.
+## 8. Required reasoning rules
+- Prefer `full_analysis` for normal user requests.
+- Exact Syzygy result overrides Stockfish evaluation in supported endgames.
+- Stockfish remains the objective source outside exact tablebase positions.
+- Opening/master-game statistics are supporting context, not an engine override.
+- Player history is only for personalization/training advice and must not alter the objective best move.
+- Independent providers should run in parallel with short timeouts and graceful fallback.
+- Never use the entire 30-second window by default.
 
-## 7. Final verification report
+## 9. Final report
 Return:
-- GitHub repo URL
+- GitHub repo and PR/commit status
 - Cloud Run service URL
 - MCP URL
-- health-check status
-- Stockfish version returned by `engine_status`
-- test results
-- CI/CD status
-- whether Codex MCP connection was added
-- whether ChatGPT connection still needs a manual account/UI step
-- estimated cost-sensitive settings (min/max instances, CPU, memory)
-- any permissions or login steps that could not be completed
+- health status
+- Stockfish version
+- `full_analysis` measured latency
+- tablebase verification result
+- Firestore history read status and write-gate status
+- local/CI test results
+- GitHub Actions deployment result
+- whether Codex MCP was connected
+- whether ChatGPT still needs a manual account/UI connection step
+- current cost controls (`min=0`, `max=3`, CPU, memory, timeout)
+- any login/permission/token step that could not be completed
 
-Do not stop after generating commands; execute everything you are permitted to execute and verify the live service.
-
----
+Do not stop after merely printing commands; execute and verify everything permitted by the current environment.
