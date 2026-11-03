@@ -31,4 +31,4 @@ COPY app ./app
 RUN pip install --no-cache-dir . && chmod -R a+rX /app
 USER appuser
 EXPOSE 8080
-CMD ["python", "-m", "app.server"]
+CMD ["python", "-m", "app.cedar_server"]
