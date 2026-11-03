@@ -1,6 +1,9 @@
 import pytest
 
-from app.visual import compare_visual_fens, validate_visual_reconstruction
+from app.visual import (
+    compare_visual_fens,
+    validate_visual_reconstruction,
+)
 
 STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 AFTER_E4_FEN = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
