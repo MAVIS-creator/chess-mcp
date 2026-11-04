@@ -116,6 +116,28 @@ LICHESS_TOKEN=...
 
 Do not commit the token to GitHub. Without it, `full_analysis` continues normally with local opening recognition + Stockfish + Syzygy + history.
 
+## Cedar Chess exact endgame route
+
+The GCP backend also exposes an authenticated `POST /api/tablebase`
+endpoint for the Cedar Chess game. It uses the **same Bearer token**
+as `POST /api/analyze`, validates the supplied FEN, and returns the
+existing cached Syzygy endgame lookup via `context_service.tablebase_context`.
+
+- Input: `{"fen":"<valid FEN>"}`.
+- Positions with more than seven pieces return `applicable: false`
+  without a network lookup.
+- For positions with seven or fewer pieces, `available`, `exact`
+  and the sorted legal `moves[].uci` indicate whether an authoritative
+  tablebase choice exists.
+- On Lichess tablebase timeout or outage, the result is non-exact and
+  Cedar Chess falls back to ordinary Stockfish analysis.
+- The route never accepts a player ID or returns player data. Existing
+  token verification is required for every request.
+
+This is deliberately separate from player-learning aggregates held in
+the Cedar Chess Supabase project. Syzygy is *mathematically solved*
+endgame knowledge, not a crowdsourced prediction or LLM suggestion.
+
 ## Syzygy
 
 For standard positions with seven or fewer pieces, the MCP queries the Lichess tablebase service. When the result is exact, `full_analysis` marks Syzygy as the authoritative source instead of treating Stockfish's heuristic evaluation as final.
