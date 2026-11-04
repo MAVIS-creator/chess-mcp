@@ -99,6 +99,46 @@ async def cedar_browser_analyze(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Engine unavailable", "detail": str(exc)}, status_code=503)
 
 
+@mcp.custom_route("/api/tablebase", methods=["POST"])
+async def cedar_browser_tablebase(request: Request) -> JSONResponse:
+    """Authenticated exact Syzygy endgame context for Cedar Chess gameplay."""
+    authorization = request.headers.get("authorization", "")
+    if not authorization.startswith("Bearer "):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    token = authorization[7:].strip()
+    if not token or await EnvironmentTokenVerifier().verify_token(token) is None:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    fen = payload.get("fen")
+    if not isinstance(fen, str) or not fen.strip() or len(fen) > 120:
+        return JSONResponse({"error": "A valid FEN is required"}, status_code=400)
+
+    try:
+        board = service.board_from_fen(fen.strip())
+        if len(board.piece_map()) > 7:
+            return JSONResponse({
+                "applicable": False,
+                "available": False,
+                "exact": False,
+                "piece_count": len(board.piece_map()),
+            })
+
+        result = context_service.tablebase_context(board.fen(), timeout_ms=1300)
+        # Return only endgame information, never player-specific history.
+        return JSONResponse(result)
+    except ValueError:
+        return JSONResponse({"error": "Invalid chess position"}, status_code=400)
+
+
 @mcp.tool
 def validate_position(fen: str) -> dict:
     """Validate a FEN and return basic position facts plus legal moves."""
